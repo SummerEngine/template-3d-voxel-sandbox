@@ -7,11 +7,11 @@ func _ready() -> void:
 	_setup_environment()
 	_setup_sun()
 
-	var world := VoxelWorld.new()
+	var world := preload("res://voxel_world.gd").new()
 	world.name = "VoxelWorld"
 	add_child(world)
 
-	var player := Player.new()
+	var player := preload("res://player.gd").new()
 	player.name = "Player"
 	player.world = world
 	player.position = Vector3(0.0, 4.0, 0.0)
