@@ -4,3 +4,6 @@
 
 # Summer Engine local-only state
 .summer/local/
+
+# Editor-generated backups
+*.bak
