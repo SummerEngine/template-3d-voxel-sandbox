@@ -21,7 +21,7 @@ func _ready() -> void:
 	add_child(hud)
 
 	var spawn_h: int = world.surface_height(0, 0) + 3
-	var player := preload("res://player.gd").new()
+	var player := preload("res://scripts/player/player.gd").new()
 	player.name = "Player"
 	player.position = Vector3(0.0, float(spawn_h), 0.0)
 	player.hud = hud
