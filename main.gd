@@ -1,31 +1,35 @@
 extends Node3D
 
-## Game root. Builds lighting, the voxel world, the player, wandering animals,
-## the HUD and the pause menu at runtime. Tuned light for low-end hardware.
+## Game root. Builds lighting, the streamed voxel world (ChunkManager), the player,
+## the HUD, the pause menu and a few placeholder animals. Tuned for low-end hardware.
 
-const ANIMAL_COUNT := 6
+const ANIMAL_COUNT := 4
 
 func _ready() -> void:
-	Engine.max_fps = 60                      # cap GPU work on laptops
+	Engine.max_fps = 60
 
 	_setup_environment()
 	_setup_sun()
 
-	var world := preload("res://voxel_world.gd").new()
-	world.name = "VoxelWorld"
+	var world := preload("res://scripts/world/chunk_manager.gd").new()
+	world.name = "ChunkManager"
 	add_child(world)
+	world.preload_around(Vector2i(0, 0))   # ground under spawn
 
 	var hud := preload("res://scripts/ui/hud.gd").new()
 	hud.name = "HUD"
 	add_child(hud)
 
+	var spawn_h: int = world.surface_height(0, 0) + 3
 	var player := preload("res://player.gd").new()
 	player.name = "Player"
-	player.position = Vector3(0.0, 4.0, 0.0)
+	player.position = Vector3(0.0, float(spawn_h), 0.0)
 	player.hud = hud
+	player.world_manager = world
 	add_child(player)
+	world.player = player
 
-	_spawn_animals()
+	_spawn_animals(world)
 
 	var pause := preload("res://scripts/ui/pause_menu.gd").new()
 	pause.name = "PauseMenu"
@@ -38,7 +42,6 @@ func _setup_environment() -> void:
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	# Keep post-processing off for performance (no SSAO / glow / SDFGI).
 	var we := WorldEnvironment.new()
 	we.name = "WorldEnvironment"
 	we.environment = env
@@ -49,21 +52,23 @@ func _setup_sun() -> void:
 	sun.name = "DirectionalLight3D"
 	sun.rotation_degrees = Vector3(-50.0, -40.0, 0.0)
 	sun.shadow_enabled = true
-	# Cheapest shadow setup: single split, short range.
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
 	sun.directional_shadow_max_distance = 40.0
 	add_child(sun)
 
-func _spawn_animals() -> void:
+func _spawn_animals(world) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
 	var colors := [
-		Color(0.95, 0.92, 0.86),  # sheep
-		Color(0.90, 0.62, 0.62),  # pig
-		Color(0.55, 0.45, 0.35),  # cow
+		Color(0.95, 0.92, 0.86),
+		Color(0.90, 0.62, 0.62),
+		Color(0.55, 0.45, 0.35),
 	]
 	for i in range(ANIMAL_COUNT):
+		var ax := rng.randf_range(-6, 6)
+		var az := rng.randf_range(-6, 6)
+		var ah: int = world.surface_height(int(ax), int(az)) + 2
 		var a := preload("res://scripts/world/animal.gd").new()
 		a.set_color(colors[i % colors.size()])
-		a.position = Vector3(rng.randf_range(-6, 6), 2.0, rng.randf_range(-6, 6))
+		a.position = Vector3(ax, float(ah), az)
 		add_child(a)

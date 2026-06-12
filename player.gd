@@ -16,6 +16,7 @@ const FALL_DAMAGE_SPEED := 16.0   # landing faster than this costs hearts
 const VOID_Y := -20.0
 
 var hud                            # HUD CanvasLayer (assigned by main.gd)
+var world_manager                  # ChunkManager (assigned by main.gd)
 var camera: Camera3D
 var ray: RayCast3D
 var flying := false
@@ -27,14 +28,9 @@ var spawn_point := Vector3(0, 4, 0)
 var _was_on_floor := true
 var _fall_speed := 0.0
 
-var palette: Array[Color] = [
-	Color(0.85, 0.22, 0.22),  # red
-	Color(0.22, 0.52, 0.90),  # blue
-	Color(0.95, 0.80, 0.20),  # yellow
-	Color(0.32, 0.78, 0.34),  # green
-	Color(0.92, 0.92, 0.92),  # white
-]
-var block_names := ["Red", "Blue", "Yellow", "Green", "White"]
+# Block types the player can place (ids from VoxelTypes).
+var block_types := [VoxelTypes.GRASS, VoxelTypes.DIRT, VoxelTypes.STONE, VoxelTypes.LAVA]
+var block_names := ["Grass", "Dirt", "Stone", "Lava"]
 var selected := 0
 
 func _ready() -> void:
@@ -63,7 +59,7 @@ func _ready() -> void:
 func _update_hud() -> void:
 	if hud:
 		hud.set_health(health, max_health)
-		hud.set_block(block_names[selected], selected + 1, palette.size())
+		hud.set_block(block_names[selected], selected + 1, block_types.size())
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
@@ -84,7 +80,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				flying = not flying
 				if flying:
 					velocity = Vector3.ZERO
-			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:
+			KEY_1, KEY_2, KEY_3, KEY_4:
 				selected = event.keycode - KEY_1
 				_update_hud()
 
@@ -140,23 +136,19 @@ func _respawn() -> void:
 	_was_on_floor = true
 
 func _break_block() -> void:
-	if not ray.is_colliding():
+	if world_manager == null or not ray.is_colliding():
 		return
-	var body := ray.get_collider()
-	if body and body.has_meta("cell"):
-		var w := get_parent().get_node_or_null("VoxelWorld")
-		if w:
-			w.remove_block(body.get_meta("cell"))
+	var cell := _cell_from_hit(-0.5)   # step into the hit block
+	world_manager.set_block(cell.x, cell.y, cell.z, VoxelTypes.AIR)
 
 func _place_block() -> void:
-	if not ray.is_colliding():
+	if world_manager == null or not ray.is_colliding():
 		return
-	var body := ray.get_collider()
-	if body == null or not body.has_meta("cell"):
-		return
-	var cell: Vector3i = body.get_meta("cell")
-	var normal: Vector3 = ray.get_collision_normal()
-	var target: Vector3i = cell + Vector3i(normal.round())
-	var w := get_parent().get_node_or_null("VoxelWorld")
-	if w:
-		w.add_block(target, palette[selected])
+	var cell := _cell_from_hit(0.5)    # step out to the empty neighbour cell
+	world_manager.set_block(cell.x, cell.y, cell.z, block_types[selected])
+
+func _cell_from_hit(offset: float) -> Vector3i:
+	var p := ray.get_collision_point()
+	var nrm := ray.get_collision_normal()
+	var inside := p + nrm * offset
+	return Vector3i(floori(inside.x), floori(inside.y), floori(inside.z))
