@@ -14,7 +14,6 @@ config/name="template-3d-voxel-sandbox"
 run/main_scene="res://scenes/main_menu.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
-config/run/main_scene="res://main.tscn"
 
 [dotnet]
 

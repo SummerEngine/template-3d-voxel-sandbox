@@ -13,8 +13,8 @@ static func is_solid(t: int) -> bool:
 
 static func color_of(t: int) -> Color:
 	match t:
-		GRASS: return Color(0.30, 0.58, 0.27)
-		DIRT:  return Color(0.45, 0.32, 0.20)
-		STONE: return Color(0.46, 0.46, 0.49)
-		LAVA:  return Color(0.90, 0.32, 0.10)
+		GRASS: return Color(0.36, 0.66, 0.30)
+		DIRT:  return Color(0.48, 0.34, 0.21)
+		STONE: return Color(0.53, 0.53, 0.56)
+		LAVA:  return Color(0.95, 0.40, 0.12)
 		_:     return Color(1, 0, 1)

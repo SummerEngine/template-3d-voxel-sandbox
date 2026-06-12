@@ -36,12 +36,21 @@ func _ready() -> void:
 	add_child(pause)
 
 func _setup_environment() -> void:
+	# Natural daytime sky: blue above, soft horizon, earthy ground.
+	var sky_mat := ProceduralSkyMaterial.new()
+	sky_mat.sky_top_color = Color(0.30, 0.52, 0.86)
+	sky_mat.sky_horizon_color = Color(0.78, 0.86, 0.95)
+	sky_mat.ground_horizon_color = Color(0.78, 0.86, 0.95)
+	sky_mat.ground_bottom_color = Color(0.52, 0.46, 0.38)
 	var sky := Sky.new()
-	sky.sky_material = ProceduralSkyMaterial.new()
+	sky.sky_material = sky_mat
 	var env := Environment.new()
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	env.ambient_light_energy = 1.0
+	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	env.tonemap_white = 6.0
 	var we := WorldEnvironment.new()
 	we.name = "WorldEnvironment"
 	we.environment = env
@@ -50,10 +59,12 @@ func _setup_environment() -> void:
 func _setup_sun() -> void:
 	var sun := DirectionalLight3D.new()
 	sun.name = "DirectionalLight3D"
-	sun.rotation_degrees = Vector3(-50.0, -40.0, 0.0)
+	sun.rotation_degrees = Vector3(-55.0, -45.0, 0.0)
+	sun.light_energy = 1.4
+	sun.light_color = Color(1.0, 0.97, 0.90)
 	sun.shadow_enabled = true
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
-	sun.directional_shadow_max_distance = 40.0
+	sun.directional_shadow_max_distance = 60.0
 	add_child(sun)
 
 func _spawn_animals(world) -> void:
