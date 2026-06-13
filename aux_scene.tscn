@@ -1,0 +1,5 @@
+[gd_scene format=3 uid="uid://bli85ii1q34nq"]
+
+[ext_resource type="PackedScene" uid="uid://ugoa7h8b753p" path="res://assets/models/player_animated.glb" id="1_p27qg"]
+
+[node name="AuxScene" unique_id=624614474 instance=ExtResource("1_p27qg")]
