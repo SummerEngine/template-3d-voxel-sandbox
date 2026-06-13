@@ -36,6 +36,8 @@ var camera: Camera3D
 var ray: RayCast3D
 var model: Node3D
 var anim_player: AnimationPlayer
+var weapon_holder
+var _swing_cd := 0.0
 
 var idle_anim := ""
 var walk_anim := ""
@@ -112,6 +114,11 @@ func _setup_model() -> void:
 		if idle_anim != "":
 			anim_player.play(idle_anim)
 
+	var skel := model.find_child("Skeleton3D", true, false) as Skeleton3D
+	weapon_holder = preload("res://scripts/player/weapon_holder.gd").new()
+	add_child(weapon_holder)
+	weapon_holder.setup(skel, preload("res://scripts/player/weapon_registry.gd").list())
+
 func _find_anim(keywords: Array) -> String:
 	if anim_player == null:
 		return ""
@@ -133,6 +140,10 @@ func _update_hud() -> void:
 	if hud:
 		hud.set_health(health, max_health)
 		hud.set_block(block_names[selected], selected + 1, block_types.size())
+		if weapon_holder:
+			var w: Dictionary = weapon_holder.current()
+			if not w.is_empty():
+				hud.set_tool("%s  (dmg %d  spd %.1f  mine x%.1f)" % [String(w.name), int(w.damage), float(w.attack_speed), float(w.mining_power)])
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
@@ -154,6 +165,12 @@ func _unhandled_input(event: InputEvent) -> void:
 					velocity = Vector3.ZERO
 			KEY_1, KEY_2, KEY_3, KEY_4:
 				selected = event.keycode - KEY_1
+				_update_hud()
+			KEY_Q:
+				if weapon_holder: weapon_holder.prev()
+				_update_hud()
+			KEY_E:
+				if weapon_holder: weapon_holder.next()
 				_update_hud()
 
 func _physics_process(delta: float) -> void:
@@ -205,6 +222,8 @@ func _physics_process(delta: float) -> void:
 
 	if _mine_timer > 0.0:
 		_mine_timer -= delta
+	if _swing_cd > 0.0:
+		_swing_cd -= delta
 	_update_animation()
 
 	if global_position.y < VOID_Y:
@@ -240,6 +259,14 @@ func _respawn() -> void:
 	_landed_once = false
 
 func _break_block() -> void:
+	if _swing_cd > 0.0:
+		return
+	var spd := 1.5
+	if weapon_holder:
+		var w: Dictionary = weapon_holder.current()
+		if not w.is_empty():
+			spd = float(w.attack_speed)
+	_swing_cd = 1.0 / maxf(spd, 0.1)   # attack speed gates how fast you swing
 	if mine_anim != "":
 		_mine_timer = 0.6
 	if world_manager == null or not ray.is_colliding():
