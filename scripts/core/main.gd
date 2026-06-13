@@ -4,6 +4,8 @@ extends Node3D
 ## the HUD, the pause menu and a few placeholder animals. Tuned for low-end hardware.
 
 const ANIMAL_COUNT := 4
+const ORE_COUNT := 6
+const ORE_PATH := "res://assets/models/props/gold_ore.glb"
 
 func _ready() -> void:
 	Engine.max_fps = 60
@@ -30,6 +32,7 @@ func _ready() -> void:
 	world.player = player
 
 	_spawn_animals(world)
+	_spawn_ore(world)
 
 	var pause := preload("res://scripts/ui/pause_menu.gd").new()
 	pause.name = "PauseMenu"
@@ -83,3 +86,21 @@ func _spawn_animals(world) -> void:
 		a.set_color(colors[i % colors.size()])
 		a.position = Vector3(ax, float(ah), az)
 		add_child(a)
+
+func _spawn_ore(world) -> void:
+	if not ResourceLoader.exists(ORE_PATH):
+		return
+	var packed := load(ORE_PATH) as PackedScene
+	if packed == null:
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	for i in range(ORE_COUNT):
+		var ox := rng.randf_range(-16, 16)
+		var oz := rng.randf_range(-16, 16)
+		var oy: int = world.surface_height(int(ox), int(oz))
+		var ore := packed.instantiate() as Node3D
+		if ore == null:
+			continue
+		ore.position = Vector3(ox, float(oy), oz)
+		add_child(ore)

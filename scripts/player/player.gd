@@ -1,10 +1,13 @@
 class_name Player
 extends CharacterBody3D
 
-## Third-person creative controller with the ANIMATED character.
-## Orbit camera (mouse), camera-relative move, sprint/jump/fly, break/place at
-## screen centre. Drives Idle / Walk / Mine clips on the rigged model.
-## Hearts with fall damage (first landing free). Esc owned by PauseMenu.
+## Third-person animated controller (single-player), Minecraft-style controls.
+## Move WASD, look mouse, Space jump (double-tap = toggle fly), Ctrl sprint,
+## Shift descend while flying, 1-4 block, scroll / Q-E switch weapon,
+## HOLD Left Mouse to mine/attack, Right Mouse to place. Esc owned by PauseMenu.
+##
+## The rig has no real idle clip (its "Idle" is a static T-pose), so idle uses a
+## frozen Walk pose; jumping uses a Run clip.
 
 const WALK_SPEED := 5.0
 const SPRINT_SPEED := 8.0
@@ -14,6 +17,7 @@ const MOUSE_SENS := 0.0025
 const REACH := 6.0
 const FALL_DAMAGE_SPEED := 16.0
 const VOID_Y := -40.0
+const DOUBLE_TAP_MS := 300
 
 const CAM_HEIGHT := 1.5
 const CAM_DISTANCE := 4.5
@@ -21,10 +25,9 @@ const PITCH_MIN := -1.2
 const PITCH_MAX := 0.6
 const TURN_SPEED := 12.0
 
-# Rigged animated character — tweak if size/facing is off.
 const MODEL_PATH := "res://assets/models/characters/player_rigged.glb"
 const MODEL_SCALE := 1.0
-const MODEL_YAW_OFFSET := PI
+const MODEL_YAW_OFFSET := 0.0   # this rig faces +Z; 0 makes W walk forward
 
 var hud
 var world_manager
@@ -38,10 +41,12 @@ var model: Node3D
 var anim_player: AnimationPlayer
 var weapon_holder
 var _swing_cd := 0.0
+var _place_cd := 0.0
+var _last_space_ms := 0
 
-var idle_anim := ""
 var walk_anim := ""
 var mine_anim := ""
+var run_anim := ""
 
 var flying := false
 var gravity: float = float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
@@ -94,7 +99,6 @@ func _ready() -> void:
 
 func _setup_model() -> void:
 	if not ResourceLoader.exists(MODEL_PATH):
-		push_warning("Rigged model missing: " + MODEL_PATH)
 		return
 	var packed := load(MODEL_PATH) as PackedScene
 	if packed == null:
@@ -106,13 +110,14 @@ func _setup_model() -> void:
 	add_child(model)
 	anim_player = model.find_child("AnimationPlayer", true, false) as AnimationPlayer
 	if anim_player:
-		idle_anim = _find_anim(["idle"])
 		walk_anim = _find_anim(["walk"])
+		run_anim = _find_anim(["run"])
 		mine_anim = _find_anim(["mine", "minig", "mining", "attack"])
-		_set_loop(idle_anim)
 		_set_loop(walk_anim)
-		if idle_anim != "":
-			anim_player.play(idle_anim)
+		_set_loop(run_anim)
+		if walk_anim != "":
+			anim_player.play(walk_anim)
+			anim_player.speed_scale = 0.0   # start in frozen-walk idle
 
 	var skel := model.find_child("Skeleton3D", true, false) as Skeleton3D
 	weapon_holder = preload("res://scripts/player/weapon_holder.gd").new()
@@ -153,12 +158,21 @@ func _unhandled_input(event: InputEvent) -> void:
 		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 			return
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			_break_block()
-		elif event.button_index == MOUSE_BUTTON_RIGHT:
-			_place_block()
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP and weapon_holder:
+			weapon_holder.prev()
+			_update_hud()
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and weapon_holder:
+			weapon_holder.next()
+			_update_hud()
 	elif event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
+			KEY_SPACE:
+				var now := Time.get_ticks_msec()
+				if now - _last_space_ms < DOUBLE_TAP_MS:
+					flying = not flying
+					if flying:
+						velocity = Vector3.ZERO
+				_last_space_ms = now
 			KEY_F:
 				flying = not flying
 				if flying:
@@ -182,6 +196,7 @@ func _physics_process(delta: float) -> void:
 			_take_damage(int((_fall_speed - FALL_DAMAGE_SPEED) / 4.0) + 1)
 	_was_on_floor = on_floor
 
+	# Camera-relative movement
 	var yb := yaw_pivot.global_transform.basis
 	var fwd := yb.z * -1.0
 	fwd.y = 0.0
@@ -199,13 +214,14 @@ func _physics_process(delta: float) -> void:
 	if dir.length() > 0.0:
 		dir = dir.normalized()
 
+	var sprinting := Input.is_physical_key_pressed(KEY_CTRL)
 	if flying:
 		var v := dir * FLY_SPEED
 		if Input.is_physical_key_pressed(KEY_SPACE): v.y += FLY_SPEED
 		if Input.is_physical_key_pressed(KEY_SHIFT): v.y -= FLY_SPEED
 		velocity = v
 	else:
-		var speed := SPRINT_SPEED if Input.is_physical_key_pressed(KEY_SHIFT) else WALK_SPEED
+		var speed := SPRINT_SPEED if sprinting else WALK_SPEED
 		velocity.x = dir.x * speed
 		velocity.z = dir.z * speed
 		if not on_floor:
@@ -216,14 +232,21 @@ func _physics_process(delta: float) -> void:
 	_fall_speed = maxf(0.0, -velocity.y)
 	move_and_slide()
 
+	# Face movement direction
 	if model and dir.length() > 0.1:
 		var ty := atan2(dir.x, dir.z) + MODEL_YAW_OFFSET
 		model.rotation.y = lerp_angle(model.rotation.y, ty, delta * TURN_SPEED)
 
-	if _mine_timer > 0.0:
-		_mine_timer -= delta
-	if _swing_cd > 0.0:
-		_swing_cd -= delta
+	# Hold-to-use (Minecraft style)
+	if _swing_cd > 0.0: _swing_cd -= delta
+	if _place_cd > 0.0: _place_cd -= delta
+	if _mine_timer > 0.0: _mine_timer -= delta
+	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+			_try_break()
+		elif Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
+			_try_place()
+
 	_update_animation()
 
 	if global_position.y < VOID_Y:
@@ -234,13 +257,44 @@ func _physics_process(delta: float) -> void:
 func _update_animation() -> void:
 	if anim_player == null:
 		return
-	var want := idle_anim
+	var horiz := Vector2(velocity.x, velocity.z).length()
+	var want := walk_anim
+	var freeze := false
 	if _mine_timer > 0.0 and mine_anim != "":
 		want = mine_anim
-	elif not flying and is_on_floor() and Vector2(velocity.x, velocity.z).length() > 0.6 and walk_anim != "":
-		want = walk_anim
+	elif not flying and not is_on_floor() and run_anim != "":
+		want = run_anim                       # "jump" = run pose in the air
+	elif not flying and is_on_floor() and horiz > 0.6:
+		want = walk_anim                      # walking
+	else:
+		want = walk_anim                      # idle = frozen walk
+		freeze = true
 	if want != "" and anim_player.current_animation != want:
-		anim_player.play(want, 0.15)
+		anim_player.play(want, 0.12)
+	anim_player.speed_scale = 0.0 if freeze else 1.0
+
+func _try_break() -> void:
+	if _swing_cd > 0.0:
+		return
+	var spd := 1.5
+	if weapon_holder:
+		var w: Dictionary = weapon_holder.current()
+		if not w.is_empty():
+			spd = float(w.attack_speed)
+	_swing_cd = 1.0 / maxf(spd, 0.1)
+	if mine_anim != "":
+		_mine_timer = minf(0.45, _swing_cd)
+	if world_manager == null or not ray.is_colliding():
+		return
+	var cell := _cell_from_hit(-0.5)
+	world_manager.set_block(cell.x, cell.y, cell.z, VoxelTypes.AIR)
+
+func _try_place() -> void:
+	if _place_cd > 0.0 or world_manager == null or not ray.is_colliding():
+		return
+	_place_cd = 0.2
+	var cell := _cell_from_hit(0.5)
+	world_manager.set_block(cell.x, cell.y, cell.z, block_types[selected])
 
 func _take_damage(amount: int) -> void:
 	if amount <= 0:
@@ -257,28 +311,6 @@ func _respawn() -> void:
 	_fall_speed = 0.0
 	_was_on_floor = true
 	_landed_once = false
-
-func _break_block() -> void:
-	if _swing_cd > 0.0:
-		return
-	var spd := 1.5
-	if weapon_holder:
-		var w: Dictionary = weapon_holder.current()
-		if not w.is_empty():
-			spd = float(w.attack_speed)
-	_swing_cd = 1.0 / maxf(spd, 0.1)   # attack speed gates how fast you swing
-	if mine_anim != "":
-		_mine_timer = 0.6
-	if world_manager == null or not ray.is_colliding():
-		return
-	var cell := _cell_from_hit(-0.5)
-	world_manager.set_block(cell.x, cell.y, cell.z, VoxelTypes.AIR)
-
-func _place_block() -> void:
-	if world_manager == null or not ray.is_colliding():
-		return
-	var cell := _cell_from_hit(0.5)
-	world_manager.set_block(cell.x, cell.y, cell.z, block_types[selected])
 
 func _cell_from_hit(offset: float) -> Vector3i:
 	var p := ray.get_collision_point()

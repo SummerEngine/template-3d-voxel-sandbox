@@ -35,7 +35,7 @@ func _build() -> void:
 	add_child(tool_label)
 
 	var hint := Label.new()
-	hint.text = "WASD move   Shift sprint   Space jump   F fly   1-4 block   Q/E tool   LMB break   RMB place   Esc pause"
+	hint.text = "WASD move   Ctrl sprint   Space jump (x2 = fly)   1-4 block   Scroll / Q-E weapon   Hold LMB mine   RMB place   Esc pause"
 	hint.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	hint.position = Vector2(16, -30)
 	hint.modulate = Color(1, 1, 1, 0.7)

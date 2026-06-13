@@ -1,5 +1,0 @@
-[gd_scene format=3 uid="uid://dmbar8pqucnmm"]
-
-[ext_resource type="PackedScene" uid="uid://rhbmd54cffx5" path="res://assets/models/props/gold_ore.glb" id="1_acwod"]
-
-[node name="gold_ore" unique_id=1858212798 instance=ExtResource("1_acwod")]
