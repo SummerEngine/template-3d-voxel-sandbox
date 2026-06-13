@@ -1,35 +1,61 @@
 # Assets
 
-All art and sound for the template lives here, organized by type. Both **generated** assets
-(via the Summer MCP/CLI) and **hand-made** assets (created in the studio and imported) go in
-the matching subfolder.
+All game assets, organised by type. Everything here is either AI-generated through
+Summer Engine Studio (royalty-free, free commercial-use licence) or a project mock-up.
+No third-party copyrighted assets are bundled.
 
-## Folders
+```
+assets/
+├── audio/
+│   ├── ambient/
+│   │   └── wind.mp3              # looping outdoor wind bed (main.gd ambient player)
+│   └── sfx/
+│       ├── blocks/
+│       │   ├── break_soft.mp3    # break grass / dirt / sand / wood / leaves
+│       │   ├── break_hard.mp3    # break stone / cobble / ore / lava
+│       │   └── place.mp3         # place a block
+│       ├── items/
+│       │   └── pickup.mp3        # collect a dropped item
+│       ├── mobs/
+│       │   └── monster_hurt.mp3  # hit a hostile mob
+│       └── player/
+│           ├── step_grass.mp3    # footstep on soft ground
+│           ├── step_stone.mp3    # footstep on stone
+│           ├── swing.mp3         # weapon / mining swing
+│           ├── hurt.mp3          # player takes damage
+│           └── eat.mp3           # eat an apple
+├── materials/
+│   └── block_atlas.gdshader      # samples one tile of the 4x4 atlas per face
+├── models/
+│   ├── characters/               # player_rigged.glb (animated player) + player.glb
+│   ├── weapons/                  # 27 melee weapons (see weapon_registry.gd)
+│   ├── tools/                    # legacy tool models
+│   └── props/                    # gold_ore.glb
+└── textures/
+    ├── blocks/
+    │   └── atlas.png             # 4x4 voxel texture atlas (tile order below)
+    ├── menu_background.png        # main-menu mock-up
+    └── reference/                # concept art only — NOT loaded at runtime
+```
 
-| Folder | What goes here | Formats |
-|---|---|---|
-| `textures/` | Block face textures, UI sprites, the block **atlas** | `.png` |
-| `models/` | 3D props/characters (non-voxel meshes) | `.glb`, `.gltf` |
-| `materials/` | Reusable Godot material resources | `.tres`, `.material` |
-| `audio/` | SFX (place/break/step) and music | `.ogg`, `.wav` |
+## Block atlas tile order
 
-## Naming conventions
+`atlas.png` is a 4×4 grid (tile index = `row * 4 + col`). `VoxelTypes.atlas_index()`
+maps each block id to its tile, and `block_atlas.gdshader` samples it. To re-skin a
+block, repaint its tile in place — no code changes needed.
 
-- Block textures: `block_<name>_<face>.png` (e.g. `block_grass_top.png`, `block_dirt_side.png`).
-- Atlas: `blocks_atlas.png` + a matching mapping in the block registry.
-- Materials: `mat_<thing>.tres` (e.g. `mat_grass.tres`).
-- Audio: `sfx_<action>.ogg` (e.g. `sfx_block_break.ogg`), `music_<name>.ogg`.
+| col→ | 0 | 1 | 2 | 3 |
+|------|---|---|---|---|
+| **row 0** | grass | dirt | stone | cobblestone |
+| **row 1** | sand | wood | planks | leaves |
+| **row 2** | coal ore | iron ore | gold ore | diamond ore |
+| **row 3** | glass | water | lava | bedrock |
 
-## Creating assets
+## Licensing
 
-**Via Summer MCP / CLI (preferred):**
-- Images/textures → `summer_generate_image`
-- 3D models → `summer_generate_3d`
-- Audio → `summer_generate_audio`
-- Import existing files/URLs → `summer_import_asset` / `summer_import_from_url`
-
-**Manually:** create or import in the Summer studio, then save the file into the correct
-subfolder above so it's tracked in git.
-
-> Keep this folder tidy — the block registry and scenes reference assets **by path**, so a
-> consistent layout and naming scheme keeps everything wired up as the project grows.
+| Source | Files | Licence |
+|--------|-------|---------|
+| Summer Engine Studio — ElevenLabs SFX | `audio/**` | Free, commercial use |
+| Summer Engine Studio — image generation | `textures/blocks/atlas.png` | Free, commercial use |
+| Project mock-up / concept | `textures/menu_background.png`, `textures/reference/**` | Project-owned |
+| Imported 3D models | `models/**` | Free, commercial use |

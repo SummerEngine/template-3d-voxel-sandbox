@@ -34,6 +34,7 @@ const WEAPONS := [
 	{"name": "Iron Maul",        "file": "maul_iron_2",      "category": "maul",    "damage": 13, "attack_speed": 1.0, "mining_power": 1.3, "desc": "A solid iron maul that turns slow swings into devastating impacts."},
 	{"name": "Sledgehammer",     "file": "sledgehammer",     "category": "maul",    "damage": 15, "attack_speed": 0.8, "mining_power": 1.3, "desc": "A two-handed wrecker that flattens anything its slow swing connects with."},
 	{"name": "Heavy Maul",       "file": "maul_heavy",       "category": "maul",    "damage": 17, "attack_speed": 0.7, "mining_power": 1.3, "desc": "A monstrous slab of a maul that pulps anything caught by its ponderous arc."},
+	{"name": "Bare Hands",       "file": "",                 "category": "fist",    "damage": 1,  "attack_speed": 2.0, "mining_power": 1.0, "desc": "No weapon — weak, slow to mine, but always ready."},
 ]
 
 static func list() -> Array:
