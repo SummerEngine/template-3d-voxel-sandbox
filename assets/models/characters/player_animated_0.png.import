@@ -14,7 +14,7 @@ generator_parameters={
 
 [deps]
 
-source_file="res://assets/models/player_animated_0.png"
+source_file="res://assets/models/characters/player_animated_0.png"
 dest_files=["res://.godot/imported/player_animated_0.png-be1c4c79c65f599e6215002186c0a7cd.s3tc.ctex"]
 
 [params]

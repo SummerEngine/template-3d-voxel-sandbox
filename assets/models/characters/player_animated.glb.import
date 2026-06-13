@@ -8,7 +8,7 @@ path="res://.godot/imported/player_animated.glb-60547267dc8930426e88aca5f6cfcd97
 
 [deps]
 
-source_file="res://assets/models/player_animated.glb"
+source_file="res://assets/models/characters/player_animated.glb"
 dest_files=["res://.godot/imported/player_animated.glb-60547267dc8930426e88aca5f6cfcd97.scn"]
 
 [params]
