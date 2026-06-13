@@ -22,6 +22,7 @@ var hud
 var world_manager
 var camera: Camera3D
 var ray: RayCast3D
+var tool_holder
 var flying := false
 var gravity: float = float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
 
@@ -55,6 +56,9 @@ func _ready() -> void:
 	camera.add_child(ray)
 	ray.add_exception(self)
 
+	tool_holder = preload("res://scripts/player/tool_holder.gd").new()
+	camera.add_child(tool_holder)
+
 	spawn_point = global_position
 	_landed_once = false
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -64,6 +68,8 @@ func _update_hud() -> void:
 	if hud:
 		hud.set_health(health, max_health)
 		hud.set_block(block_names[selected], selected + 1, block_types.size())
+		if tool_holder:
+			hud.set_tool(tool_holder.current_name())
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
@@ -86,6 +92,12 @@ func _unhandled_input(event: InputEvent) -> void:
 					velocity = Vector3.ZERO
 			KEY_1, KEY_2, KEY_3, KEY_4:
 				selected = event.keycode - KEY_1
+				_update_hud()
+			KEY_Q:
+				if tool_holder: tool_holder.prev()
+				_update_hud()
+			KEY_E:
+				if tool_holder: tool_holder.next()
 				_update_hud()
 
 func _physics_process(delta: float) -> void:
@@ -143,6 +155,8 @@ func _respawn() -> void:
 	_landed_once = false
 
 func _break_block() -> void:
+	if tool_holder:
+		tool_holder.swing()
 	if world_manager == null or not ray.is_colliding():
 		return
 	var cell := _cell_from_hit(-0.5)

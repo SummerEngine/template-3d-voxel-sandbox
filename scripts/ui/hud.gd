@@ -5,6 +5,7 @@ extends CanvasLayer
 
 var hearts_label: Label
 var block_label: Label
+var tool_label: Label
 
 func _ready() -> void:
 	layer = 5
@@ -28,8 +29,13 @@ func _build() -> void:
 	block_label.position = Vector2(16, 52)
 	add_child(block_label)
 
+	tool_label = Label.new()
+	tool_label.position = Vector2(16, 76)
+	tool_label.modulate = Color(0.85, 0.92, 1.0)
+	add_child(tool_label)
+
 	var hint := Label.new()
-	hint.text = "WASD move    Shift sprint    Space jump    F fly    1-5 colour    LMB break    RMB place    Esc pause"
+	hint.text = "WASD move   Shift sprint   Space jump   F fly   1-4 block   Q/E tool   LMB break   RMB place   Esc pause"
 	hint.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	hint.position = Vector2(16, -30)
 	hint.modulate = Color(1, 1, 1, 0.7)
@@ -46,3 +52,7 @@ func set_health(h: int, max_h: int) -> void:
 func set_block(block_name: String, idx: int, total: int) -> void:
 	if block_label:
 		block_label.text = "Block: %s  (%d/%d)" % [block_name, idx, total]
+
+func set_tool(tool_name: String) -> void:
+	if tool_label:
+		tool_label.text = "Tool: %s  (Q/E)" % tool_name
