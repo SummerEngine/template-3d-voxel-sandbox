@@ -6,7 +6,6 @@ extends Node3D
 ## Tweak HOLD_* below if a model sits wrong in the hand.
 
 const TOOLS := [
-	{ "name": "Pickaxe",    "path": "res://assets/models/tools/tool.glb" },
 	{ "name": "Sword",      "path": "res://assets/models/tools/sword.glb" },
 	{ "name": "War Axe",    "path": "res://assets/models/tools/war_axe.glb" },
 	{ "name": "Battle Axe", "path": "res://assets/models/tools/double_bit_axe.glb" },
