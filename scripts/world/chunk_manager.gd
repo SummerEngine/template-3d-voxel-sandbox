@@ -13,8 +13,10 @@ const CHUNK_D := 16
 const WORLD_H := 256
 const SEA_LEVEL := 40          # water fills below this: oceans, lakes, rivers
 const MOUNTAIN_ROCK := 64      # bare-stone peaks at/above this height
+const SNOW_LEVEL := 82         # snow-capped peaks at/above this height
 const RENDER_RADIUS := 3       # chunks around the player (longer view distance)
-const LOADS_PER_FRAME := 1
+const LOADS_PER_FRAME := 3     # async chunk builds dispatched per frame (they run in parallel)
+const APPLIES_PER_FRAME := 2   # finished chunk meshes applied to the scene per frame (smooths pop-in)
 
 const CAVE_SQUASH := 1.4       # >1 flattens caves vertically
 const CAVE_THRESHOLD := 0.55   # carve where 3D cave noise exceeds this
@@ -28,11 +30,21 @@ var mountain_noise := FastNoiseLite.new()  # ridged mountain ranges
 var river_noise := FastNoiseLite.new()     # winding river channels
 var forest_noise := FastNoiseLite.new()    # forest / jungle density regions
 var moisture_noise := FastNoiseLite.new()  # dry deserts vs grassy land
+var temp_noise := FastNoiseLite.new()      # temperature regions (hot deserts <-> cold snow)
+var oasis_noise := FastNoiseLite.new()     # rare desert oasis pockets
 var cave_noise := FastNoiseLite.new()
 var chunks: Dictionary = {}    # Vector2i -> Chunk node
 var overrides: Dictionary = {} # Vector3i -> int (player edits)
+var chests: Dictionary = {}    # Vector3i -> Inventory (per-chest storage)
+
+## The storage Inventory for the chest at a cell (created empty on first open).
+func chest_at(cell: Vector3i) -> Inventory:
+	if not chests.has(cell):
+		chests[cell] = Inventory.new()
+	return chests[cell]
 var _queue: Array = []
 var _center := Vector2i(999999, 999999)
+var _apply_budget := 0         # per-frame budget chunks consume to apply their finished mesh
 
 func _ready() -> void:
 	noise.seed = 1337
@@ -53,6 +65,12 @@ func _ready() -> void:
 	moisture_noise.seed = 3131
 	moisture_noise.noise_type = FastNoiseLite.TYPE_PERLIN
 	moisture_noise.frequency = 0.004        # large dry / desert patches
+	temp_noise.seed = 8123
+	temp_noise.noise_type = FastNoiseLite.TYPE_PERLIN
+	temp_noise.frequency = 0.0026           # large temperature regions (deserts <-> snowlands)
+	oasis_noise.seed = 6464
+	oasis_noise.noise_type = FastNoiseLite.TYPE_PERLIN
+	oasis_noise.frequency = 0.05            # small scattered oasis pockets in deserts
 	cave_noise.seed = 9001
 	cave_noise.noise_type = FastNoiseLite.TYPE_PERLIN
 	cave_noise.frequency = 0.045
@@ -65,16 +83,25 @@ func _ready() -> void:
 func surface_height(wx: int, wz: int) -> int:
 	var fx := float(wx)
 	var fz := float(wz)
-	var cont := noise.get_noise_2d(fx, fz)              # -1..1
-	var h := float(SEA_LEVEL) + cont * 7.0              # gentle land/ocean — shallow water
-	var relief := clampf(cont + 0.3, 0.0, 1.0)
-	h += detail_noise.get_noise_2d(fx, fz) * 5.0 * (0.4 + relief)   # gentle rolling hills
-	if cont > 0.5:                                      # mountains: rarer + shorter
-		var m := 1.0 - absf(mountain_noise.get_noise_2d(fx, fz))   # ridged 0..1
-		h += pow(m, 1.7) * 16.0 * ((cont - 0.5) / 0.5)
-	var rv := river_noise.get_noise_2d(fx, fz)          # wide, shallow rivers (gentle banks)
-	if absf(rv) < 0.05 and h > float(SEA_LEVEL) and h < float(SEA_LEVEL + 12):
-		h = lerpf(h, float(SEA_LEVEL - 1), 1.0 - absf(rv) / 0.05)
+	var cont := noise.get_noise_2d(fx, fz)              # -1..1 continents vs oceans
+	var h := float(SEA_LEVEL) + cont * 8.0
+	# Ridged mountain ranges — prominent on land, so the world has real rocky peaks.
+	var land := clampf((cont + 0.15) / 0.6, 0.0, 1.0)
+	var ridge := 1.0 - absf(mountain_noise.get_noise_2d(fx, fz))   # 0..1 ridge lines
+	var mtn := pow(ridge, 3.0) * land
+	h += mtn * 52.0
+	h += detail_noise.get_noise_2d(fx, fz) * 6.0        # rolling hills everywhere
+	var desert := _is_desert(wx, wz)
+	if mtn < 0.18 and not desert:
+		# Rivers wind through temperate lowland only — never slicing across deserts.
+		var rv := river_noise.get_noise_2d(fx, fz)
+		if absf(rv) < 0.04 and h > float(SEA_LEVEL) and h < float(SEA_LEVEL + 9):
+			h = lerpf(h, float(SEA_LEVEL - 1), 1.0 - absf(rv) / 0.04)
+	elif desert:
+		# Deserts get rare small oasis pools instead of rivers.
+		var ov := oasis_noise.get_noise_2d(fx, fz)
+		if ov > 0.80 and h > float(SEA_LEVEL) and h < float(SEA_LEVEL + 8):
+			h = minf(h, float(SEA_LEVEL - 1))
 	return int(round(h))
 
 ## The natural (un-edited) block at a world coordinate. Pass the column surface in
@@ -113,20 +140,71 @@ func _solid_block(wx: int, wy: int, wz: int, s: int) -> int:
 		var c := cave_noise.get_noise_3d(float(wx), float(wy) * CAVE_SQUASH, float(wz))
 		if c > CAVE_THRESHOLD:
 			return VoxelTypes.AIR
-	var beachy := s <= SEA_LEVEL + 1
-	var rocky := s >= MOUNTAIN_ROCK
 	if wy == s:
-		if beachy: return VoxelTypes.SAND
-		if rocky: return VoxelTypes.STONE
-		return VoxelTypes.SAND if _is_desert(wx, wz) else VoxelTypes.GRASS
+		return _surface_block(wx, wz, s)
 	if wy >= s - 3:
-		if beachy: return VoxelTypes.SAND
-		if rocky: return VoxelTypes.STONE
-		return VoxelTypes.SAND if _is_desert(wx, wz) else VoxelTypes.DIRT
+		return _subsurface_block(wx, wz, s)
 	return _ore_or_stone(wx, wy, wz)
 
+## Top block of a column, by biome: beach/desert sand (with a green ring around oases),
+## bare rock then snow caps up high, snow over cold lowlands, grass elsewhere.
+func _surface_block(wx: int, wz: int, s: int) -> int:
+	if s <= SEA_LEVEL + 1:
+		return VoxelTypes.SAND
+	if s >= SNOW_LEVEL:
+		return VoxelTypes.SNOW
+	if s >= MOUNTAIN_ROCK:
+		return VoxelTypes.STONE
+	if _temp01(wx, wz) < 0.30:
+		return VoxelTypes.SNOW                       # cold lowlands / snow hills
+	if _is_desert(wx, wz):
+		var ov := oasis_noise.get_noise_2d(float(wx), float(wz))
+		if ov > 0.62 and ov <= 0.80:
+			return VoxelTypes.GRASS                   # greenery ring around an oasis pool
+		return VoxelTypes.SAND
+	return VoxelTypes.GRASS
+
+func _subsurface_block(wx: int, wz: int, s: int) -> int:
+	if s <= SEA_LEVEL + 1:
+		return VoxelTypes.SAND
+	if s >= MOUNTAIN_ROCK:
+		return VoxelTypes.STONE
+	if _is_desert(wx, wz):
+		return VoxelTypes.SAND
+	return VoxelTypes.DIRT                            # snow & grass both sit on dirt
+
+# --- climate / biomes ---------------------------------------------------------------
+func _temp01(wx: int, wz: int) -> float:
+	return temp_noise.get_noise_2d(float(wx), float(wz)) * 0.5 + 0.5
+
+func _moist01(wx: int, wz: int) -> float:
+	return moisture_noise.get_noise_2d(float(wx), float(wz)) * 0.5 + 0.5
+
+## Hot AND dry → desert.
 func _is_desert(wx: int, wz: int) -> bool:
-	return moisture_noise.get_noise_2d(float(wx), float(wz)) < -0.3
+	return _temp01(wx, wz) > 0.60 and _moist01(wx, wz) < 0.40
+
+## Biome label for a column (used by weather + fauna). Height wins for water/mountain/
+## snow-cap; otherwise temperature + moisture pick desert / jungle / forest / meadow / snow.
+func biome_at(wx: int, wz: int) -> String:
+	var s := surface_height(wx, wz)
+	if s <= SEA_LEVEL:
+		return "water"
+	if s >= SNOW_LEVEL:
+		return "snow"
+	if s >= MOUNTAIN_ROCK:
+		return "mountain"
+	var t := _temp01(wx, wz)
+	var m := _moist01(wx, wz)
+	if t < 0.30:
+		return "snow"
+	if t > 0.60 and m < 0.40:
+		return "desert"
+	if t > 0.58 and m > 0.66:
+		return "jungle"
+	if m > 0.62:
+		return "forest"
+	return "meadow"                      # broad temperate middle = open green plains
 
 func _ore_or_stone(wx: int, wy: int, wz: int) -> int:
 	var r := _hash3(wx, wy, wz) % 1000
@@ -139,18 +217,24 @@ func _ore_or_stone(wx: int, wy: int, wz: int) -> int:
 ## Tree density by biome: jungle = very dense + tall, woods = dense, scattered
 ## elsewhere, and open plains/meadows stay treeless.
 func is_tree(cx: int, cz: int) -> bool:
-	if _is_desert(cx, cz):
-		return false                    # deserts stay sandy and bare
-	var f := forest_noise.get_noise_2d(float(cx), float(cz))
+	var t := _temp01(cx, cz)
+	var m := _moist01(cx, cz)
+	if t > 0.60 and m < 0.40:
+		# Desert: palms only on the oasis greenery ring (matches the grass band), never bare sand.
+		if oasis_noise.get_noise_2d(float(cx), float(cz)) <= 0.62:
+			return false
+		return (_hash2(cx, cz) % 8) == 0
+	if t < 0.30:
+		return (_hash2(cx, cz) % 30) == 0    # snowy: sparse conifers
 	var rarity := 0
-	if f > 0.45:      rarity = 7    # jungle
-	elif f > 0.15:    rarity = 13   # woods / forest
-	elif f > -0.15:   rarity = 34   # scattered
-	else:             return false  # open meadow / plains
+	if t > 0.58 and m > 0.66:   rarity = 7    # jungle — very dense
+	elif m > 0.62:              rarity = 16   # forest / woods
+	elif m > 0.45:              rarity = 44   # scattered savanna trees
+	else:                       return false  # open meadow / plains stay treeless
 	return (_hash2(cx, cz) % rarity) == 0
 
 func is_jungle(cx: int, cz: int) -> bool:
-	return forest_noise.get_noise_2d(float(cx), float(cz)) > 0.45
+	return _temp01(cx, cz) > 0.58 and _moist01(cx, cz) > 0.66
 
 ## Block contributed by any tree whose base sits within TREE_R columns of (wx,wz).
 func _tree_block(wx: int, wy: int, wz: int) -> int:
@@ -202,10 +286,11 @@ func set_block(wx: int, wy: int, wz: int, t: int) -> void:
 	# rebuild neighbours when editing a border block (their culling depends on us)
 	var lx := local_x(wx)
 	var lz := local_z(wz)
-	if lx == 0: _rebuild(chunk_x(wx) - 1, chunk_z(wz))
-	elif lx == CHUNK_W - 1: _rebuild(chunk_x(wx) + 1, chunk_z(wz))
-	if lz == 0: _rebuild(chunk_x(wx), chunk_z(wz) - 1)
-	elif lz == CHUNK_D - 1: _rebuild(chunk_x(wx), chunk_z(wz) + 1)
+	var ndx := -1 if lx == 0 else (1 if lx == CHUNK_W - 1 else 0)
+	var ndz := -1 if lz == 0 else (1 if lz == CHUNK_D - 1 else 0)
+	if ndx != 0: _rebuild(chunk_x(wx) + ndx, chunk_z(wz))
+	if ndz != 0: _rebuild(chunk_x(wx), chunk_z(wz) + ndz)
+	if ndx != 0 and ndz != 0: _rebuild(chunk_x(wx) + ndx, chunk_z(wz) + ndz)   # diagonal corner
 
 # --- integer hashes (deterministic, position-seeded) ---
 
@@ -229,14 +314,15 @@ func local_z(wz: int) -> int: return ((wz % CHUNK_D) + CHUNK_D) % CHUNK_D
 # --- streaming ---
 
 func preload_around(center: Vector2i) -> void:
-	# Synchronously load the immediate area so the player has ground at spawn.
+	# Synchronously build the immediate area so the player has ground at spawn (no fall-through).
 	for dz in range(-1, 2):
 		for dx in range(-1, 2):
-			_load(Vector2i(center.x + dx, center.y + dz))
+			_load(Vector2i(center.x + dx, center.y + dz), true)
 
 func _process(_delta: float) -> void:
 	if player == null:
 		return
+	_apply_budget = APPLIES_PER_FRAME   # reset each frame; chunks consume it as they finish (parent processes first)
 	var pc := Vector2i(chunk_x(int(player.global_position.x)), chunk_z(int(player.global_position.z)))
 	if pc != _center:
 		_center = pc
@@ -246,6 +332,21 @@ func _process(_delta: float) -> void:
 	while n < LOADS_PER_FRAME and not _queue.is_empty():
 		_load(_queue.pop_front())
 		n += 1
+
+## A finishing chunk calls this on the main thread before applying its mesh; returns
+## false once this frame's quota is spent, so applies spread across frames (no hitch).
+func consume_apply_budget() -> bool:
+	if _apply_budget > 0:
+		_apply_budget -= 1
+		return true
+	return false
+
+## Has the chunk covering this world column finished building its collider? Used by the
+## player to avoid falling through terrain that is still streaming in (which otherwise
+## causes a phantom long fall + fall-damage "death from nowhere").
+func is_chunk_ready(wx: int, wz: int) -> bool:
+	var c := Vector2i(chunk_x(wx), chunk_z(wz))
+	return chunks.has(c) and is_instance_valid(chunks[c]) and chunks[c].is_ready()
 
 func _refresh_queue(center: Vector2i) -> void:
 	var list: Array = []
@@ -264,10 +365,12 @@ func _unload_far(center: Vector2i) -> void:
 			remove.append(c)
 	for c in remove:
 		if is_instance_valid(chunks[c]):
+			if chunks[c].is_building():
+				continue                    # defer: freeing now would block the frame on its task
 			chunks[c].queue_free()
 		chunks.erase(c)
 
-func _load(c: Vector2i) -> void:
+func _load(c: Vector2i, sync := false) -> void:
 	if chunks.has(c):
 		return
 	var ch := preload("res://scripts/world/chunk.gd").new()
@@ -275,7 +378,13 @@ func _load(c: Vector2i) -> void:
 	ch.coord = c
 	ch.position = Vector3(c.x * CHUNK_W, 0.0, c.y * CHUNK_D)
 	chunks[c] = ch
-	add_child(ch)   # Chunk._ready() builds the mesh
+	add_child(ch)
+	# Spawn area builds synchronously (instant ground); streamed chunks build on a worker
+	# thread and apply their mesh on a later frame, so streaming never stutters.
+	if sync:
+		ch.build()
+	else:
+		ch.start_async()
 
 func _rebuild(cx: int, cz: int) -> void:
 	var c := Vector2i(cx, cz)

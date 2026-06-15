@@ -8,6 +8,23 @@ extends Node3D
 const CW := 16
 const CD := 16
 
+# The atlas is loaded once from the raw PNG on disk (so edits to it apply without an
+# editor reimport) and shared by every chunk's material. Falls back to the imported
+# resource for exported builds where res:// PNGs aren't on disk.
+static var _atlas_cache: Texture2D
+
+static func _atlas_texture(path: String) -> Texture2D:
+	if _atlas_cache != null:
+		return _atlas_cache              # cached once loaded; retries until then
+	var disk := ProjectSettings.globalize_path(path)
+	if FileAccess.file_exists(disk):
+		var img := Image.load_from_file(disk)
+		if img != null:
+			_atlas_cache = ImageTexture.create_from_image(img)
+	if _atlas_cache == null and ResourceLoader.exists(path):
+		_atlas_cache = load(path)
+	return _atlas_cache
+
 var manager                      # ChunkManager
 var coord: Vector2i
 var _mesh_instance: MeshInstance3D
@@ -26,16 +43,80 @@ var _top := 0
 var _sx := CW + 2                # cache stride in x (border on both sides)
 var _sz := CD + 2                # cache stride in z
 var _collision_faces := PackedVector3Array()   # solid faces only (water excluded)
+var _water_arrays: Array = []                  # water mesh surface (separate, translucent)
+
+# Threaded streaming build: the heavy compute (terrain fill + greedy mesh) runs on a
+# worker thread; the finished mesh + collider are applied on the main thread (capped
+# per frame by the manager) so streaming new chunks never hitches the framerate.
+var _task_id := -1
+var _build_ready := false
+var _applied := false
+var _async_arrays: Array = []
+var _overrides_snapshot: Dictionary = {}
 
 func _ready() -> void:
-	build()
+	set_process(false)   # the manager triggers the build: build() (sync) or start_async()
+
+## True once the mesh + collider have been applied to the scene. Until then there is
+## no ground here yet (async streaming), so the player must not fall through it.
+func is_ready() -> bool:
+	return _applied
+
+## True while a worker build task is in flight. The manager defers unloading such chunks so
+## freeing them never blocks the main thread waiting on the task in _exit_tree.
+func is_building() -> bool:
+	return _task_id != -1
+
+# --- build pipeline -----------------------------------------------------------------
+# _prepare() is the heavy, scene-free compute (terrain fill + greedy mesh) — safe on a
+# worker thread. _apply() does the scene mutation (mesh + collider) and MUST run on the
+# main thread. build() does both synchronously (spawn area + edit rebuilds, where we
+# want the result this instant); start_async() runs _prepare() on a worker and applies
+# the result on a later main-thread frame.
 
 func build() -> void:
+	if _task_id != -1:                                       # finish any in-flight async build
+		WorkerThreadPool.wait_for_task_completion(_task_id)
+		_task_id = -1
+	_apply(_prepare(manager.overrides))
+	_build_ready = false
+	_applied = true
+	set_process(false)
+
+func start_async() -> void:
+	_overrides_snapshot = manager.overrides.duplicate()      # snapshot for a thread-safe read
+	_build_ready = false
+	_applied = false
+	set_process(true)
+	_task_id = WorkerThreadPool.add_task(_thread_build)
+
+func _thread_build() -> void:
+	_async_arrays = _prepare(_overrides_snapshot)            # worker thread — NO scene access
+	_build_ready = true                                      # publish last
+
+func _process(_delta: float) -> void:
+	if _build_ready and not _applied and manager.consume_apply_budget():
+		if _task_id != -1:
+			WorkerThreadPool.wait_for_task_completion(_task_id)   # barrier before reading results
+			_task_id = -1
+		_apply(_async_arrays)
+		_async_arrays = []
+		_applied = true
+		set_process(false)
+
+func _exit_tree() -> void:
+	if _task_id != -1:                                       # never free the node mid-task
+		WorkerThreadPool.wait_for_task_completion(_task_id)
+		_task_id = -1
+
+## Heavy, scene-free pass: surface heights, voxel-cache fill, greedy mesh. Returns the
+## mesh arrays; collision faces land in _collision_faces. Reads `overrides_src` (a
+## snapshot on the worker, or the live dict for a synchronous build).
+func _prepare(overrides_src: Dictionary) -> Array:
 	var ox := coord.x * CW
 	var oz := coord.y * CD
-
-	# Precompute surface heights for this chunk's columns (+1 border ring) and the
-	# tallest point we need to mesh up to (covers terrain and any tall edits).
+	# Surface heights for this chunk's columns (+1 border ring) and the tallest point we
+	# must mesh up to (covers terrain and any tall edits).
 	_col_height.clear()
 	var max_y := 0
 	for lz in range(-1, CD + 1):
@@ -44,43 +125,59 @@ func build() -> void:
 			_col_height[Vector2i(ox + lx, oz + lz)] = s
 			if s > max_y:
 				max_y = s
-	for key in manager.overrides.keys():
+	for key in overrides_src.keys():
 		if manager.chunk_x(key.x) == coord.x and manager.chunk_z(key.z) == coord.y:
 			if key.y > max_y:
 				max_y = key.y
-	# Mesh up to the tallest terrain (+8 for tree canopies) but NEVER below sea level,
-	# or ocean/lake water above the floor goes unmeshed -> empty pits you fall into.
+	# Mesh up to the tallest terrain (+canopy) but NEVER below sea level, or ocean/lake
+	# water above the floor goes unmeshed -> empty pits you fall into.
 	var top: int = mini(maxi(max_y + manager.TREE_H + 1, manager.SEA_LEVEL + 1), manager.WORLD_H)
+	_fill_cache(ox, oz, top, overrides_src)
+	return _greedy(top)
 
-	_fill_cache(ox, oz, top)
-	var arrays := _greedy(top)
-
+## Main-thread scene mutation: swap in the new mesh + collider built from `arrays`.
+func _apply(arrays: Array) -> void:
 	if _mesh_instance and is_instance_valid(_mesh_instance):
 		_mesh_instance.queue_free()
 		_mesh_instance = null
 	if _body and is_instance_valid(_body):
 		_body.queue_free()
 		_body = null
-	if arrays.is_empty():
+	if arrays.is_empty() and _water_arrays.is_empty():
 		return
 
-	var am := ArrayMesh.new()
-	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	var mat: Material
 	const SHADER_PATH := "res://assets/materials/block_atlas.gdshader"
+	const WATER_SHADER := "res://assets/materials/water.gdshader"
 	const ATLAS_PATH  := "res://assets/textures/blocks/atlas.png"
-	if ResourceLoader.exists(SHADER_PATH) and ResourceLoader.exists(ATLAS_PATH):
-		var sm := ShaderMaterial.new()
-		sm.shader = load(SHADER_PATH)
-		sm.set_shader_parameter("atlas", load(ATLAS_PATH))
-		mat = sm
-	else:
-		var fb := StandardMaterial3D.new()
-		fb.vertex_color_use_as_albedo = true
-		fb.roughness = 1.0
-		fb.cull_mode = BaseMaterial3D.CULL_DISABLED
-		mat = fb
-	am.surface_set_material(0, mat)
+	var atlas_tex := _atlas_texture(ATLAS_PATH)
+	var has_atlas := ResourceLoader.exists(SHADER_PATH) and atlas_tex != null
+
+	var am := ArrayMesh.new()
+	var surf := 0
+	# Surface 0: opaque solid blocks.
+	if not arrays.is_empty():
+		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		var mat: Material
+		if has_atlas:
+			var sm := ShaderMaterial.new()
+			sm.shader = load(SHADER_PATH)
+			sm.set_shader_parameter("atlas", atlas_tex)
+			mat = sm
+		else:
+			var fb := StandardMaterial3D.new()
+			fb.vertex_color_use_as_albedo = true
+			fb.roughness = 1.0
+			fb.cull_mode = BaseMaterial3D.CULL_DISABLED
+			mat = fb
+		am.surface_set_material(surf, mat)
+		surf += 1
+	# Next surface: translucent, rippling water (rendered after the opaque blocks).
+	if not _water_arrays.is_empty() and has_atlas and ResourceLoader.exists(WATER_SHADER):
+		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _water_arrays)
+		var wm := ShaderMaterial.new()
+		wm.shader = load(WATER_SHADER)
+		wm.set_shader_parameter("atlas", atlas_tex)
+		am.surface_set_material(surf, wm)
 
 	_mesh_instance = MeshInstance3D.new()
 	_mesh_instance.mesh = am
@@ -99,7 +196,7 @@ func build() -> void:
 ## Compute the whole chunk (plus a 1-voxel border) once: ground terrain from the
 ## generator, player edits from overrides, and tree blocks layered on top — the
 ## last computed per-chunk by scanning only nearby tree origins, not per-voxel.
-func _fill_cache(ox: int, oz: int, top: int) -> void:
+func _fill_cache(ox: int, oz: int, top: int, overrides_src: Dictionary) -> void:
 	_ox = ox
 	_oz = oz
 	_top = top
@@ -111,12 +208,12 @@ func _fill_cache(ox: int, oz: int, top: int) -> void:
 	_cache = _ground_cache.duplicate()
 
 	# Overlay player edits (loop the overrides, not the volume — usually a small set).
-	for key in manager.overrides.keys():
+	for key in overrides_src.keys():
 		var lx: int = key.x - ox
 		var ly: int = key.y
 		var lz: int = key.z - oz
 		if ly >= 0 and ly <= top and lx >= -1 and lx <= CW and lz >= -1 and lz <= CD:
-			_cache[(ly * _sz + (lz + 1)) * _sx + (lx + 1)] = manager.overrides[key]
+			_cache[(ly * _sz + (lz + 1)) * _sx + (lx + 1)] = overrides_src[key]
 
 ## The expensive part: pure terrain + trees (no edits), cached for the chunk's lifetime.
 func _compute_ground(ox: int, oz: int, top: int) -> void:
@@ -137,7 +234,15 @@ func _compute_ground(ox: int, oz: int, top: int) -> void:
 		for tcx in range(ox - 1 - maxr, ox + CW + 1 + maxr):
 			if not manager.is_tree(tcx, tcz):
 				continue
-			var sc: int = manager.surface_height(tcx, tcz)
+			# Reuse the cached column height when the tree origin is inside the surf ring;
+			# only recompute the noise stack for the outer canopy-reach ring.
+			var sc: int
+			var llx := tcx - ox
+			var llz := tcz - oz
+			if llx >= -1 and llx <= CW and llz >= -1 and llz <= CD:
+				sc = surf[(llz + 1) * _sx + (llx + 1)]
+			else:
+				sc = manager.surface_height(tcx, tcz)
 			if sc <= manager.SEA_LEVEL + 1 or sc >= manager.MOUNTAIN_ROCK:
 				continue
 			var tall: bool = manager.is_jungle(tcx, tcz)
@@ -183,6 +288,12 @@ func _greedy(top: int) -> Array:
 	var colors := PackedColorArray()
 	var uvs := PackedVector2Array()
 	var indices := PackedInt32Array()
+	# Water goes into its own arrays -> a separate translucent surface.
+	var w_positions := PackedVector3Array()
+	var w_normals := PackedVector3Array()
+	var w_colors := PackedColorArray()
+	var w_uvs := PackedVector2Array()
+	var w_indices := PackedInt32Array()
 	_collision_faces = PackedVector3Array()
 
 	var dims := [CW, top, CD]
@@ -204,6 +315,10 @@ func _greedy(top: int) -> Array:
 			var s_lo: int = x[d]
 			var a_in: bool = s_lo >= 0 and s_lo < int(dims[d])
 			var b_in: bool = (s_lo + 1) >= 0 and (s_lo + 1) < int(dims[d])
+			# Skip the underside of the world floor (bottom face of the y=0 bedrock): a full
+			# flat plane you never legitimately see, so meshing it is wasted geometry — it's
+			# the "ground plane far below" visible when flying.
+			var cull_floor: bool = d == 1 and s_lo == -1
 			var n := 0
 			x[v] = 0
 			while x[v] < dv:
@@ -220,8 +335,8 @@ func _greedy(top: int) -> Array:
 					var sb := b != 0
 					if sa and not sb and a_in:
 						mask[n] = a            # front face of a (+d)
-					elif sb and not sa and b_in:
-						mask[n] = -b           # face of b (-d)
+					elif sb and not sa and b_in and not cull_floor:
+						mask[n] = -b           # face of b (-d) — but never the world's underside
 					else:
 						mask[n] = 0
 					n += 1
@@ -259,7 +374,11 @@ func _greedy(top: int) -> Array:
 						duv[u] = w
 						var dvv := [0, 0, 0]
 						dvv[v] = h
-						_quad(positions, normals, colors, uvs, indices, x, duv, dvv, d, c < 0, absi(c))
+						var bt := absi(c)
+						if bt == VoxelTypes.WATER:
+							_quad(w_positions, w_normals, w_colors, w_uvs, w_indices, x, duv, dvv, d, c < 0, bt)
+						else:
+							_quad(positions, normals, colors, uvs, indices, x, duv, dvv, d, c < 0, bt)
 						var l := 0
 						while l < h:
 							var k2 := 0
@@ -273,6 +392,16 @@ func _greedy(top: int) -> Array:
 						i += 1
 						n += 1
 				j += 1
+
+	# Build the water surface arrays (consumed by _apply as a separate translucent surface).
+	_water_arrays = []
+	if not w_positions.is_empty():
+		_water_arrays.resize(Mesh.ARRAY_MAX)
+		_water_arrays[Mesh.ARRAY_VERTEX] = w_positions
+		_water_arrays[Mesh.ARRAY_NORMAL] = w_normals
+		_water_arrays[Mesh.ARRAY_COLOR]  = w_colors
+		_water_arrays[Mesh.ARRAY_TEX_UV] = w_uvs
+		_water_arrays[Mesh.ARRAY_INDEX]  = w_indices
 
 	if positions.is_empty():
 		return []
@@ -300,9 +429,16 @@ func _quad(positions: PackedVector3Array, normals: PackedVector3Array, colors: P
 		nrm = Vector3(0.0, sgn, 0.0)
 	else:
 		nrm = Vector3(0.0, 0.0, sgn)
-	# Tile origin within the 4x4 atlas, packed into COLOR.rg for the block shader.
-	var ai := VoxelTypes.atlas_index(btype)
-	var col := Color(float(ai & 3) * 0.25, float(ai >> 2) * 0.25, 0.0, 1.0)
+	# Tile origin within the 4x4 atlas packed into COLOR.rg; per-face ambient brightness in
+	# COLOR.b gives blocks depth without real AO — top faces bright, sides medium, bottom dark
+	# (the classic voxel look), composited on top of the dynamic sun lighting.
+	var ai := VoxelTypes.face_atlas_index(btype, d, back)
+	var bright := 0.82                           # X (east/west) faces
+	if d == 1:
+		bright = 1.0 if not back else 0.6        # +Y top brightest, -Y bottom darkest
+	elif d == 2:
+		bright = 0.9                             # Z (north/south) faces
+	var col := Color(float(ai & 7) * 0.125, float(ai >> 3) * 0.125, bright, 1.0)
 	# UV extents for tiling within the atlas slot
 	var w := float(absi(duv[0]) + absi(duv[1]) + absi(duv[2]))
 	var h := float(absi(dvv[0]) + absi(dvv[1]) + absi(dvv[2]))

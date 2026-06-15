@@ -25,6 +25,9 @@ var _flee := 0.0
 var _pending_color := Color(0.95, 0.92, 0.86)
 var _rng := RandomNumberGenerator.new()
 var _flash_meshes: Array = []
+var _model: Node3D                     # the visual root, bobbed/waddled while walking
+var _model_rest_y := 0.0               # its resting local height (feet on the ground)
+var _walk_phase := 0.0                 # advancing stride phase, scaled by movement speed
 
 func set_color(c: Color) -> void:
 	_pending_color = c
@@ -52,7 +55,7 @@ func _build_visual() -> void:
 			if model:
 				add_child(model)
 				_fit_model(model, 0.95)
-				model.rotation.y = ANIMAL_YAW
+				model.rotation.y = ANIMAL_YAW; _model = model; _model_rest_y = model.position.y
 				_flash_meshes = model.find_children("*", "MeshInstance3D", true, false)
 				return
 	_build_box_fallback()
@@ -137,13 +140,14 @@ func take_damage(amount: int) -> void:
 	var a := _rng.randf_range(0.0, TAU)
 	_dir = Vector3(cos(a), 0.0, sin(a))
 
-## Drops a couple of apples (food) on death so the player can hunt to survive.
+## Drops raw meat on death so the player can hunt, then cook it in a furnace for far
+## more hunger than eating it raw.
 func _drop_food() -> void:
 	if world == null:
 		return
-	for i in range(2):
+	for i in range(_rng.randi_range(1, 2)):
 		var drop := preload("res://scripts/world/block_drop.gd").new()
-		drop.setup(VoxelTypes.APPLE, world, player)
+		drop.setup(VoxelTypes.RAW_MEAT, world, player)
 		world.add_child(drop)
 		drop.global_position = global_position + Vector3(_rng.randf_range(-0.3, 0.3), 0.6, _rng.randf_range(-0.3, 0.3))
 
@@ -169,6 +173,7 @@ func _physics_process(delta: float) -> void:
 		look_at(global_position + Vector3(_dir.x, 0.0, _dir.z), Vector3.UP)
 
 	move_and_slide()
+	_animate_walk(delta)
 
 	if global_position.y < -10.0:
 		queue_free()
@@ -193,3 +198,20 @@ func _avoid_hazards() -> void:
 		var a := atan2(_dir.x, _dir.z) + PI + _rng.randf_range(-0.7, 0.7)
 		_dir = Vector3(sin(a), 0.0, cos(a))
 		_timer = _rng.randf_range(1.0, 2.0)
+
+## Procedural walk cycle: a speed-synced vertical bob + side-to-side waddle so the
+## static animal model reads as walking (it has no skeleton to animate). Eases back
+## to rest when standing still.
+func _animate_walk(delta: float) -> void:
+	if _model == null:
+		return
+	var horiz := Vector2(velocity.x, velocity.z).length()
+	if horiz > 0.2 and is_on_floor():
+		_walk_phase += delta * (6.0 + horiz * 1.5)
+		_model.position.y = _model_rest_y + absf(sin(_walk_phase)) * 0.10
+		_model.rotation.z = sin(_walk_phase) * 0.10
+		_model.rotation.x = -0.05
+	else:
+		_model.position.y = lerpf(_model.position.y, _model_rest_y, delta * 10.0)
+		_model.rotation.z = lerpf(_model.rotation.z, 0.0, delta * 10.0)
+		_model.rotation.x = lerpf(_model.rotation.x, 0.0, delta * 10.0)

@@ -8,6 +8,7 @@ const GRAVITY := 14.0
 const MAGNET_RADIUS := 2.8
 const PICKUP_RADIUS := 1.4
 const MAGNET_SPEED := 6.0
+const ItemIcons := preload("res://scripts/ui/item_icons.gd")
 
 var block_id := VoxelTypes.AIR
 var manager                       # ChunkManager
@@ -29,6 +30,14 @@ func _ready() -> void:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = VoxelTypes.color_of(block_id)
 	mat.roughness = 0.9
+	# Blocks show their real atlas texture on the little cube; items keep the flat colour
+	# (their icons are transparent cut-outs that wouldn't read on a solid cube).
+	if block_id <= VoxelTypes.MAX_BLOCK:
+		var tex: Texture2D = ItemIcons.tile_texture(block_id)   # a single cropped tile, not the whole atlas
+		if tex != null:
+			mat.albedo_texture = tex
+			mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+			mat.albedo_color = Color.WHITE
 	_mesh.material_override = mat
 	add_child(_mesh)
 
@@ -58,6 +67,8 @@ func _physics_process(delta: float) -> void:
 		if d < MAGNET_RADIUS and _age > 0.35:
 			global_position += to.normalized() * minf(d, MAGNET_SPEED * delta)
 		if d < PICKUP_RADIUS and _age > 0.3:
+			var taken := 1
 			if player.has_method("collect_item"):
-				player.collect_item(block_id, 1)
-			queue_free()
+				taken = player.collect_item(block_id, 1)
+			if taken > 0:
+				queue_free()        # only despawn if it actually fit; else wait on the ground

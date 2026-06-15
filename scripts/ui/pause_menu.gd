@@ -8,13 +8,27 @@ var paused := false
 var world
 var player
 var day_night
+var weather
 var _toast: Label
+var _snd_click: AudioStreamPlayer
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	layer = 10
 	_build()
+	_snd_click = AudioStreamPlayer.new()
+	_snd_click.process_mode = Node.PROCESS_MODE_ALWAYS   # must sound while the tree is paused
+	if ResourceLoader.exists("res://assets/audio/sfx/ui/click.mp3"):
+		_snd_click.stream = load("res://assets/audio/sfx/ui/click.mp3")
+	_snd_click.volume_db = -8.0
+	if AudioServer.get_bus_index("SFX") != -1:
+		_snd_click.bus = "SFX"
+	add_child(_snd_click)
 	_show(false)
+
+func _play_click() -> void:
+	if _snd_click and _snd_click.stream:
+		_snd_click.play()
 
 func _build() -> void:
 	panel = Control.new()
@@ -48,18 +62,22 @@ func _build() -> void:
 	vb.add_child(title)
 
 	var resume := UITheme.make_button("RESUME", "primary", Vector2(300, 0))
+	resume.pressed.connect(_play_click)
 	resume.pressed.connect(_resume)
 	vb.add_child(resume)
 
 	var save := UITheme.make_button("SAVE WORLD", "gold", Vector2(300, 0))
+	save.pressed.connect(_play_click)
 	save.pressed.connect(_save)
 	vb.add_child(save)
 
 	var menu := UITheme.make_button("MAIN MENU", "normal", Vector2(300, 0))
+	menu.pressed.connect(_play_click)
 	menu.pressed.connect(_to_menu)
 	vb.add_child(menu)
 
 	var quit := UITheme.make_button("QUIT", "danger", Vector2(300, 0))
+	quit.pressed.connect(_play_click)
 	quit.pressed.connect(_quit)
 	vb.add_child(quit)
 
@@ -70,7 +88,7 @@ func _build() -> void:
 
 func _save() -> void:
 	if world and player:
-		var ok: bool = WorldSave.save(world, player, day_night)
+		var ok: bool = WorldSave.save(world, player, day_night, weather)
 		_toast.text = "World saved" if ok else "Save failed"
 	else:
 		_toast.text = "Nothing to save"
@@ -80,11 +98,16 @@ func _unhandled_input(event: InputEvent) -> void:
 		if paused:
 			_resume()
 		else:
-			_pause()
+			var c = get_tree().get_first_node_in_group("chest_ui")
+			if c and c.has_method("is_open") and c.is_open():
+				c.close()                            # first Esc closes an open chest
+			else:
+				_pause()
 		get_viewport().set_input_as_handled()
 
 func _pause() -> void:
 	get_tree().call_group("crafting_ui", "close")   # never stack with crafting
+	get_tree().call_group("chest_ui", "close")
 	paused = true
 	get_tree().paused = true
 	_show(true)

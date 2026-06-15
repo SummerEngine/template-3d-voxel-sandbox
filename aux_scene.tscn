@@ -1,5 +1,8 @@
 [gd_scene format=3 uid="uid://bli85ii1q34nq"]
 
 [ext_resource type="PackedScene" uid="uid://ugoa7h8b753p" path="res://assets/models/characters/player_animated.glb" id="1_p27qg"]
+[ext_resource type="PackedScene" uid="uid://dsiddrkjb7y4g" path="res://assets/models/characters/anim/bot_walk.glb" id="2_q7rnm"]
 
 [node name="AuxScene" unique_id=624614474 instance=ExtResource("1_p27qg")]
+
+[node name="BotWalk" parent="." index="1" unique_id=839618307 instance=ExtResource("2_q7rnm")]

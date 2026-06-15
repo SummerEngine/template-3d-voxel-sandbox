@@ -1,10 +1,12 @@
 class_name Inventory
 extends RefCounted
 
-## A simple 9-slot stacking inventory (the hotbar). Each slot is {id, count}.
-## Picked-up blocks stack into a matching slot first, then fill an empty one.
+## A stacking inventory. The first HOTBAR slots are the selectable/placeable hotbar;
+## the rest are storage that still counts toward crafting. Each slot is {id, count}.
+## Picked-up items stack into a matching slot first, then fill the first empty one.
 
-const SIZE := 9
+const HOTBAR := 9        # selectable hotbar slots (1-9 / scroll)
+const SIZE := 27         # total slots (hotbar + storage) — room for progression items
 const STACK_MAX := 99
 
 var slots: Array = []
@@ -80,5 +82,7 @@ func to_data() -> Array:
 
 func from_data(data: Array) -> void:
 	for i in range(mini(SIZE, data.size())):
-		slots[i].id = int(data[i][0])
-		slots[i].count = int(data[i][1])
+		var row = data[i]
+		if row is Array and row.size() >= 2:   # tolerate malformed/corrupt rows
+			slots[i].id = int(row[0])
+			slots[i].count = int(row[1])

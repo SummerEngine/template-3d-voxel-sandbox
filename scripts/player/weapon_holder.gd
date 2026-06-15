@@ -23,6 +23,14 @@ var _current := -1
 var _tween: Tween
 var _rest_pos := Vector3.ZERO   # fitted grip position (bone-scale aware)
 var _inv_scale := 1.0           # 1 / bone scale, to convert world offsets to local
+var _world_visible := true      # the in-world (third-person) weapon; hidden in first person
+
+## Show/hide the third-person weapon held in the character's hand. First person hides it
+## so ONLY the first-person viewmodel weapon is seen (no duplicate floating weapon).
+func set_world_visible(v: bool) -> void:
+	_world_visible = v
+	if _model and is_instance_valid(_model):
+		_model.visible = v
 
 func setup(skeleton: Skeleton3D, registry: Array) -> void:
 	weapons = registry
@@ -86,6 +94,7 @@ func equip(index: int) -> void:
 	_model.rotation_degrees = GRIP_ROTATION_DEG
 	_attach.add_child(_model)
 	_fit_weapon(_model)
+	_model.visible = _world_visible          # keep hidden in first person (viewmodel shows instead)
 
 ## Scale a weapon to a hand-appropriate length regardless of its model's intrinsic
 ## size, and centre it on the grip so it's always visible in the hand.
@@ -125,6 +134,18 @@ func _merged_local_aabb(root: Node3D) -> AABB:
 				result = a
 				has = true
 	return result
+
+## Add a weapon/tool to the owned set; equip it only if asked (crafted = equip,
+## advancement reward = keep your current weapon).
+func add_weapon(w: Dictionary, do_equip := true) -> void:
+	weapons.append(w)
+	if do_equip:
+		equip(weapons.size() - 1)
+
+## Halt any in-progress swing tween (e.g. on death, so the weapon doesn't keep moving).
+func stop_swing() -> void:
+	if _tween and _tween.is_valid():
+		_tween.kill()
 
 func next() -> void:
 	if not weapons.is_empty():

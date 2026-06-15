@@ -9,7 +9,29 @@ const PATH := "user://world_save.json"
 static func has_save() -> bool:
 	return FileAccess.file_exists(PATH)
 
-static func save(world, player, day_night) -> bool:
+static func _chests_data(world) -> Array:
+	var out: Array = []
+	for cell in world.chests.keys():
+		out.append([cell.x, cell.y, cell.z, world.chests[cell].to_data()])
+	return out
+
+## Rebuilds the chests dictionary (Vector3i -> Inventory) from saved data.
+static func chests_from(data: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for e in data.get("chests", []):
+		var inv := Inventory.new()
+		if e.size() >= 4 and e[3] is Array:
+			inv.from_data(e[3])
+		out[Vector3i(int(e[0]), int(e[1]), int(e[2]))] = inv
+	return out
+
+static func _tool_names(player) -> Array:
+	var names: Array = []
+	for w in player.owned_tools:
+		names.append(String(w.get("name", "")))
+	return names
+
+static func save(world, player, day_night, weather = null) -> bool:
 	var edits: Array = []
 	for k in world.overrides.keys():
 		edits.append([k.x, k.y, k.z, world.overrides[k]])
@@ -24,8 +46,13 @@ static func save(world, player, day_night) -> bool:
 			"health": player.health,
 			"hunger": player.hunger,
 			"selected": player.selected,
+			"tools": _tool_names(player),
+			"armor_tier": player.armor_tier,
+			"armor_name": player.armor_name,
 		},
 		"inventory": player.inventory.to_data(),
+		"chests": _chests_data(world),
+		"weather": weather.save_state() if weather else {},
 	}
 	var f := FileAccess.open(PATH, FileAccess.WRITE)
 	if f == null:

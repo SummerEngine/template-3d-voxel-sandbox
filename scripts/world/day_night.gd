@@ -7,8 +7,8 @@ extends Node
 
 signal phase_changed(is_night: bool)
 
-const DAY_LENGTH := 300.0       # seconds for a full cycle
-const NIGHT_CUTOFF := 0.12      # daylight below this counts as night
+const DAY_LENGTH := 480.0       # seconds for a full cycle (longer days = more prep time)
+const NIGHT_CUTOFF := 0.20      # daylight below this counts as night — a real, lasting siege window
 
 const DAY_SUN := Color(1.0, 0.97, 0.90)
 const NIGHT_SUN := Color(0.55, 0.62, 0.85)
@@ -21,10 +21,10 @@ const DUSK_GLOW := Color(0.95, 0.45, 0.20)
 var time_of_day := 0.30         # 0..1 (0.25 = noon, 0.75 = midnight)
 var _sun: DirectionalLight3D
 var _env: Environment
-var _sky: ProceduralSkyMaterial
+var _sky: ShaderMaterial
 var _was_night := false
 
-func setup(sun: DirectionalLight3D, env: Environment, sky: ProceduralSkyMaterial) -> void:
+func setup(sun: DirectionalLight3D, env: Environment, sky: ShaderMaterial) -> void:
 	_sun = sun
 	_env = env
 	_sky = sky
@@ -51,9 +51,11 @@ func _apply() -> void:
 	if _sky:
 		var glow: float = clampf(1.0 - absf(elev) * 3.0, 0.0, 1.0)   # peaks at dawn/dusk
 		var horizon := NIGHT_HORIZON.lerp(DAY_HORIZON, daylight).lerp(DUSK_GLOW, glow * 0.6)
-		_sky.sky_top_color = NIGHT_TOP.lerp(DAY_TOP, daylight)
-		_sky.sky_horizon_color = horizon
-		_sky.ground_horizon_color = horizon
+		_sky.set_shader_parameter("top_color", NIGHT_TOP.lerp(DAY_TOP, daylight))
+		_sky.set_shader_parameter("horizon_color", horizon)
+		_sky.set_shader_parameter("star_amount", clampf(1.0 - daylight * 2.0, 0.0, 1.0))
+		if _env:
+			_env.fog_light_color = horizon   # fog blends into the current sky horizon
 
 	var night := daylight < NIGHT_CUTOFF
 	if night != _was_night:
