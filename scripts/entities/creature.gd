@@ -42,6 +42,8 @@ var _phase := 0.0
 var _bank := 0.0
 var _last_yaw := 0.0
 var _avoid_t := 0.0                   # throttle terrain-avoidance world queries (not every frame)
+var _anim_player: AnimationPlayer     # the model's own AnimationPlayer, if it's a rigged model
+var _has_clip := false                # true -> a baked clip drives the body (skip procedural anim)
 
 func setup(c: Dictionary, w, p) -> void:
 	cfg = c
@@ -86,8 +88,45 @@ func _build_visual() -> void:
 				_rest_y = model.position.y
 				_flash_meshes = model.find_children("*", "MeshInstance3D", true, false)
 				_tint_untextured()
+				_setup_clip(model)
 				return
 	_build_box_fallback(target_h)
+
+## If the model ships with a rigged AnimationPlayer, loop the clip that best matches this
+## creature's locomotion (walk / fly / swim / slither, then idle, then the first clip) and
+## let it drive the body — the procedural bob/sway is only for static models.
+func _setup_clip(model: Node3D) -> void:
+	var players := model.find_children("*", "AnimationPlayer", true, false)
+	if players.is_empty():
+		return
+	_anim_player = players[0] as AnimationPlayer
+	if _anim_player == null:
+		return
+	var clip := _pick_clip(_anim_player.get_animation_list())
+	if clip == "":
+		return
+	var anim := _anim_player.get_animation(clip)
+	if anim:
+		anim.loop_mode = Animation.LOOP_LINEAR
+	_anim_player.play(clip)
+	_anim_player.speed_scale = 1.0
+	_has_clip = true
+
+func _pick_clip(list: PackedStringArray) -> String:
+	var prefer: Array
+	match _mode:
+		AIR:   prefer = ["fly", "flying", "flap", "glide"]
+		WATER: prefer = ["swim", "swimming"]
+		_:     prefer = ["walk", "run", "move", "crawl", "slither", "hop", "trot"]
+	prefer.append_array(["idle", "loop", "rest"])
+	for key in prefer:
+		for a in list:
+			if key in String(a).to_lower():
+				return a
+	for a in list:               # fallback: anything that isn't the import RESET pose
+		if String(a) != "RESET":
+			return a
+	return ""
 
 ## Some generated models import without a real texture and render as flat grey. Give those
 ## meshes the creature's species colour so it reads correctly; leave properly-textured
@@ -227,7 +266,7 @@ func _avoid_ground_hazards() -> void:
 		_timer = _rng.randf_range(1.0, 2.0)
 
 func _anim_ground(delta: float) -> void:
-	if _model == null:
+	if _model == null or _has_clip:
 		return
 	var horiz := Vector2(velocity.x, velocity.z).length()
 	var moving := horiz > 0.2 and is_on_floor()
@@ -271,7 +310,7 @@ func _move_air(delta: float) -> void:
 	_anim_air(delta, vy)
 
 func _anim_air(delta: float, vy: float) -> void:
-	if _model == null:
+	if _model == null or _has_clip:
 		return
 	_phase += delta * 9.0
 	# Wing flap reads as a body bob; bank into the turn; pitch with climb/dive.
@@ -322,7 +361,7 @@ func _avoid_shore() -> void:
 		_timer = _rng.randf_range(1.0, 2.0)
 
 func _anim_water(delta: float) -> void:
-	if _model == null:
+	if _model == null or _has_clip:
 		return
 	_phase += delta * (7.0 + _speed)
 	# Tail wiggle (yaw sway) + a gentle body roll — reads as swimming.

@@ -173,6 +173,7 @@ func _ready() -> void:
 	_setup_audio()
 	_setup_highlight()
 	_setup_light()
+	_setup_ambient_motes()   # drifting dust motes in the air for atmosphere
 	_apply_view()   # first-person by default: hide the body, show the animated viewmodel
 
 	spawn_point = global_position
@@ -182,6 +183,44 @@ func _ready() -> void:
 	if hud and hud.has_signal("respawn_requested"):
 		hud.respawn_requested.connect(_do_respawn)
 	_update_hud()
+
+## Faint, near-weightless dust motes drifting in the air around the player. World-space
+## (local_coords off) so you move THROUGH them; the emitter follows the player so the air
+## always has a little life. Unshaded + softly emissive so they catch the eye day or night.
+func _setup_ambient_motes() -> void:
+	var p := CPUParticles3D.new()
+	p.local_coords = false
+	p.amount = 60
+	p.lifetime = 9.0
+	p.preprocess = 5.0                                   # start with the air already full
+	p.position = Vector3(0, 2.0, 0)
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+	p.emission_box_extents = Vector3(15, 7, 15)
+	p.direction = Vector3(0, 1, 0)
+	p.spread = 180.0
+	p.gravity = Vector3(0, 0.02, 0)                      # almost weightless, faint upward drift
+	p.initial_velocity_min = 0.05
+	p.initial_velocity_max = 0.22
+	p.damping_min = 0.05
+	p.damping_max = 0.15
+	p.scale_amount_min = 0.02
+	p.scale_amount_max = 0.045
+	var m := SphereMesh.new()
+	m.radius = 0.5
+	m.height = 1.0
+	m.radial_segments = 6
+	m.rings = 3
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 0.96, 0.82, 0.5)
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.95, 0.8)
+	mat.emission_energy_multiplier = 0.6
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.material = mat
+	p.mesh = m
+	p.emitting = true
+	add_child(p)
 
 func _give_starter_kit() -> void:
 	inventory.add(VoxelTypes.GRASS, 32)
@@ -195,7 +234,7 @@ func _give_starter_kit() -> void:
 var body_meshes: Array = []   # the player's body meshes (hidden in first person)
 var _viewmodel: Node3D        # held tool shown in front of the camera in first person
 const VM_REST_POS := Vector3(0.3, -0.32, -0.62)   # viewmodel resting offset from camera
-const VM_REST_ROT := Vector3(20, 120, -8)         # weapon angle: head/blade up into view, handle toward the lower-right corner
+const VM_REST_ROT := Vector3(8, 90, -45)          # yaw faces the pick head toward the crosshair; -45 roll counters the baked tilt
 var _vm_phase := 0.0          # bob/sway phase
 var _vm_swing := 0.0          # 1->0 swing progress when mining/attacking
 
@@ -654,8 +693,13 @@ func _physics_process(delta: float) -> void:
 	if on_floor and not _was_on_floor:
 		if not _landed_once:
 			_landed_once = true
-		elif _fall_speed > FALL_DAMAGE_SPEED and not in_water:
-			hurt(int((_fall_speed - FALL_DAMAGE_SPEED) / 4.0) + 1)
+		else:
+			# A real drop kicks up a dust puff + a small land-thud shake (scaled by fall speed).
+			if _fall_speed > 4.0 and not in_water:
+				_spawn_land_dust()
+				add_trauma(clampf((_fall_speed - 4.0) * 0.03, 0.0, 0.3))
+			if _fall_speed > FALL_DAMAGE_SPEED and not in_water:
+				hurt(int((_fall_speed - FALL_DAMAGE_SPEED) / 4.0) + 1)
 	_was_on_floor = on_floor
 
 	# Camera-relative movement
@@ -1278,6 +1322,31 @@ func _spawn_drop(cell: Vector3i, id: int) -> void:
 	drop.setup(id, world_manager, self)
 	world_manager.add_child(drop)
 	drop.global_position = Vector3(cell) + Vector3(0.5, 0.5, 0.5)
+
+## A low, outward puff of dusty tan particles at the feet when landing from a fall.
+func _spawn_land_dust() -> void:
+	if world_manager == null:
+		return
+	var p := CPUParticles3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(0.1, 0.1, 0.1)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.72, 0.66, 0.52)
+	bm.material = mat
+	p.mesh = bm
+	p.amount = 14
+	p.one_shot = true
+	p.lifetime = 0.5
+	p.explosiveness = 0.9
+	p.direction = Vector3.UP
+	p.spread = 88.0                       # near-horizontal — dust kicks out sideways
+	p.initial_velocity_min = 1.0
+	p.initial_velocity_max = 2.4
+	p.gravity = Vector3(0, -6.0, 0)
+	p.emitting = true
+	world_manager.add_child(p)
+	p.global_position = global_position + Vector3(0, 0.1, 0)
+	p.finished.connect(p.queue_free)
 
 func _spawn_break_particles(pos: Vector3, color: Color) -> void:
 	if world_manager == null:

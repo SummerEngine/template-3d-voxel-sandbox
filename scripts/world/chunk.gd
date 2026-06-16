@@ -7,6 +7,9 @@ extends Node3D
 
 const CW := 16
 const CD := 16
+const STUMP_H := 2                 # minable log stump under each 3D tree (kept short so it hides in the trunk)
+
+const TreeModels := preload("res://scripts/world/tree_models.gd")
 
 # The atlas is loaded once from the raw PNG on disk (so edits to it apply without an
 # editor reimport) and shared by every chunk's material. Falls back to the imported
@@ -44,6 +47,8 @@ var _sx := CW + 2                # cache stride in x (border on both sides)
 var _sz := CD + 2                # cache stride in z
 var _collision_faces := PackedVector3Array()   # solid faces only (water excluded)
 var _water_arrays: Array = []                  # water mesh surface (separate, translucent)
+var _tree_sites: Array = []                    # [{lx,lz,sc,kind,rot,h}] -> per-chunk 3D-tree MultiMesh
+var _foliage: Node3D                           # holds this chunk's tree/palm MultiMeshInstance3D nodes
 
 # Threaded streaming build: the heavy compute (terrain fill + greedy mesh) runs on a
 # worker thread; the finished mesh + collider are applied on the main thread (capped
@@ -144,6 +149,7 @@ func _apply(arrays: Array) -> void:
 		_body.queue_free()
 		_body = null
 	if arrays.is_empty() and _water_arrays.is_empty():
+		_build_foliage()       # empty terrain -> also drop any trees from a previous build
 		return
 
 	const SHADER_PATH := "res://assets/materials/block_atlas.gdshader"
@@ -193,6 +199,60 @@ func _apply(arrays: Array) -> void:
 		_body.add_child(cs)
 		add_child(_body)
 
+	_build_foliage()
+
+## Rebuild the per-chunk 3D-tree / palm MultiMeshes from _tree_sites, skipping any tree whose
+## log stump the player has chopped away (so chopping a trunk makes its model vanish).
+func _build_foliage() -> void:
+	if _foliage and is_instance_valid(_foliage):
+		_foliage.queue_free()
+		_foliage = null
+	if _tree_sites.is_empty():
+		return
+	var tree_m: Array = TreeModels.tree()      # [mesh, base_xf] or []
+	var palm_m: Array = TreeModels.palm()
+	var tree_xf: Array = []
+	var palm_xf: Array = []
+	for site in _tree_sites:
+		var wx: int = _ox + int(site.lx)
+		var wz: int = _oz + int(site.lz)
+		var sc: int = int(site.sc)
+		if _block(wx, sc + 1, wz) != VoxelTypes.WOOD:
+			continue                            # stump chopped -> don't draw the model
+		var is_palm: bool = int(site.kind) == 1
+		var model: Array = palm_m if is_palm else tree_m
+		if model.size() != 2:
+			continue                            # model missing
+		var bxf: Transform3D = model[1]
+		var hh: float = float(site.h)
+		var pb := Basis(Vector3.UP, float(site.rot)).scaled(Vector3(hh, hh, hh))
+		var lpos := Vector3(float(site.lx) + 0.5, float(sc + 1), float(site.lz) + 0.5)
+		var inst := Transform3D(pb * bxf.basis, pb * bxf.origin + lpos)
+		if is_palm:
+			palm_xf.append(inst)
+		else:
+			tree_xf.append(inst)
+	if tree_xf.is_empty() and palm_xf.is_empty():
+		return
+	_foliage = Node3D.new()
+	_foliage.name = "Foliage"
+	add_child(_foliage)
+	if not tree_xf.is_empty():
+		_add_multimesh(tree_m[0], tree_xf)
+	if not palm_xf.is_empty():
+		_add_multimesh(palm_m[0], palm_xf)
+
+func _add_multimesh(mesh: Mesh, xforms: Array) -> void:
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = mesh
+	mm.instance_count = xforms.size()
+	for i in range(xforms.size()):
+		mm.set_instance_transform(i, xforms[i])
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	_foliage.add_child(mmi)
+
 ## Compute the whole chunk (plus a 1-voxel border) once: ground terrain from the
 ## generator, player edits from overrides, and tree blocks layered on top — the
 ## last computed per-chunk by scanning only nearby tree origins, not per-voxel.
@@ -227,33 +287,32 @@ func _compute_ground(ox: int, oz: int, top: int) -> void:
 		for lx in range(-1, CW + 1):
 			surf[(lz + 1) * _sx + (lx + 1)] = _col_height[Vector2i(ox + lx, oz + lz)]
 
-	# Tree blocks for every tree whose canopy can reach this chunk (origins within 2).
+	# Trees: only a short minable LOG STUMP at each in-chunk tree origin (the full trunk +
+	# canopy is drawn by a per-chunk MultiMesh of the 3D model in _apply — see _tree_sites).
+	# Canopies no longer overhang as voxels, so only origins whose base is in this chunk matter.
 	var tree_blocks: Dictionary = {}
-	var maxr: int = manager.TREE_R
-	for tcz in range(oz - 1 - maxr, oz + CD + 1 + maxr):
-		for tcx in range(ox - 1 - maxr, ox + CW + 1 + maxr):
+	_tree_sites = []
+	for tlz in range(0, CD):
+		for tlx in range(0, CW):
+			var tcx := ox + tlx
+			var tcz := oz + tlz
 			if not manager.is_tree(tcx, tcz):
 				continue
-			# Reuse the cached column height when the tree origin is inside the surf ring;
-			# only recompute the noise stack for the outer canopy-reach ring.
-			var sc: int
-			var llx := tcx - ox
-			var llz := tcz - oz
-			if llx >= -1 and llx <= CW and llz >= -1 and llz <= CD:
-				sc = surf[(llz + 1) * _sx + (llx + 1)]
-			else:
-				sc = manager.surface_height(tcx, tcz)
+			var sc: int = surf[(tlz + 1) * _sx + (tlx + 1)]
 			if sc <= manager.SEA_LEVEL + 1 or sc >= manager.MOUNTAIN_ROCK:
 				continue
+			# Minable log stump (hidden inside the 3D trunk) so trees still drop wood.
+			for ry in range(1, STUMP_H + 1):
+				tree_blocks[Vector3i(tcx, sc + ry, tcz)] = VoxelTypes.WOOD
+			# Record where + how to place the 3D model (deterministic rotation + size variety).
+			var kind: int = manager.tree_kind(tcx, tcz)
 			var tall: bool = manager.is_jungle(tcx, tcz)
-			var rr: int = maxr if tall else 2
-			var hh: int = manager.TREE_H if tall else 6
-			for ry in range(1, hh + 1):
-				for rx in range(-rr, rr + 1):
-					for rz in range(-rr, rr + 1):
-						var tv: int = manager.tree_voxel(rx, ry, rz, tall)
-						if tv != VoxelTypes.AIR:
-							tree_blocks[Vector3i(tcx + rx, sc + ry, tcz + rz)] = tv
+			var hsh: int = ChunkManager._hash2(tcx, tcz)
+			var rot: float = float(hsh % 360) * (PI / 180.0)
+			# Smaller than before — the models are trunk-heavy, so big scales made the trunk loom.
+			var hbase: float = 5.2 if tall else (4.6 if kind == 1 else 3.6)
+			var h: float = hbase * (0.85 + float(hsh % 30) * 0.01)
+			_tree_sites.append({"lx": tlx, "lz": tlz, "sc": sc, "kind": kind, "rot": rot, "h": h})
 	var has_trees := not tree_blocks.is_empty()
 
 	for ly in range(0, top + 1):

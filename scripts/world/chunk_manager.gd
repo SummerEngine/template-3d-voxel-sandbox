@@ -21,7 +21,8 @@ const APPLIES_PER_FRAME := 2   # finished chunk meshes applied to the scene per 
 const CAVE_SQUASH := 1.4       # >1 flattens caves vertically
 const CAVE_THRESHOLD := 0.55   # carve where 3D cave noise exceeds this
 const TREE_R := 3              # max tree canopy radius (jungle)
-const TREE_H := 10             # max tree height (jungle)
+const TREE_H := 10             # vertical room reserved above ground for a tree (canopy clearance)
+const TREE_STUMP_H := 2        # minable log stump; the trunk+canopy is a 3D model (keep == Chunk.STUMP_H)
 
 var player: Node3D
 var noise := FastNoiseLite.new()           # continent / base elevation (oceans vs land)
@@ -93,7 +94,8 @@ func surface_height(wx: int, wz: int) -> int:
 	h += detail_noise.get_noise_2d(fx, fz) * 6.0        # rolling hills everywhere
 	var desert := _is_desert(wx, wz)
 	if mtn < 0.18 and not desert:
-		# Rivers wind through temperate lowland only — never slicing across deserts.
+		# Rivers wind through temperate lowland only — never slicing across deserts. Wider and
+		# deeper than before so they read as real waterways with the depth-shaded water.
 		var rv := river_noise.get_noise_2d(fx, fz)
 		if absf(rv) < 0.04 and h > float(SEA_LEVEL) and h < float(SEA_LEVEL + 9):
 			h = lerpf(h, float(SEA_LEVEL - 1), 1.0 - absf(rv) / 0.04)
@@ -236,36 +238,24 @@ func is_tree(cx: int, cz: int) -> bool:
 func is_jungle(cx: int, cz: int) -> bool:
 	return _temp01(cx, cz) > 0.58 and _moist01(cx, cz) > 0.66
 
-## Block contributed by any tree whose base sits within TREE_R columns of (wx,wz).
-func _tree_block(wx: int, wy: int, wz: int) -> int:
-	for ox in range(-TREE_R, TREE_R + 1):
-		for oz in range(-TREE_R, TREE_R + 1):
-			var cx := wx - ox
-			var cz := wz - oz
-			if not is_tree(cx, cz):
-				continue
-			var sc := surface_height(cx, cz)
-			if sc <= SEA_LEVEL + 1 or sc >= MOUNTAIN_ROCK:
-				continue                            # trees only on grassland
-			var v := tree_voxel(ox, wy - sc, oz, is_jungle(cx, cz))
-			if v != VoxelTypes.AIR:
-				return v
-	return VoxelTypes.AIR
+## Which 3D model a tree at this column uses: 1 = palm (desert oasis), 0 = broadleaf tree
+## (forest / jungle / savanna / conifer). Only meaningful where is_tree() is true.
+func tree_kind(cx: int, cz: int) -> int:
+	if _temp01(cx, cz) > 0.60 and _moist01(cx, cz) < 0.40:
+		return 1
+	return 0
 
-## Tree shape relative to its base block. tall = jungle (7-high trunk, radius-3
-## canopy); otherwise a 4-high trunk with a small leaf ball.
-func tree_voxel(rx: int, ry: int, rz: int, tall: bool) -> int:
-	var th := 7 if tall else 4
-	if rx == 0 and rz == 0 and ry >= 1 and ry <= th:
+## A tree's minable log STUMP at its own column (the trunk + leafy canopy is a 3D model the
+## chunk places, not voxels). Only the trunk cell (wx,wz) carries wood; nothing overhangs.
+func _tree_block(wx: int, wy: int, wz: int) -> int:
+	if not is_tree(wx, wz):
+		return VoxelTypes.AIR
+	var sc := surface_height(wx, wz)
+	if sc <= SEA_LEVEL + 1 or sc >= MOUNTAIN_ROCK:
+		return VoxelTypes.AIR                       # trees only on grassland
+	var ry := wy - sc
+	if ry >= 1 and ry <= TREE_STUMP_H:
 		return VoxelTypes.WOOD
-	var r2 := rx * rx + rz * rz
-	var cr2 := 9 if tall else 4
-	if ry >= th - 1 and ry <= th + 1 and r2 <= cr2:
-		return VoxelTypes.LEAVES
-	if ry == th + 2 and r2 <= (cr2 - 4 if tall else 2):
-		return VoxelTypes.LEAVES
-	if tall and ry == th + 3 and r2 <= 1:
-		return VoxelTypes.LEAVES
 	return VoxelTypes.AIR
 
 func get_block(wx: int, wy: int, wz: int) -> int:
