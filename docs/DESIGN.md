@@ -1,111 +1,64 @@
-# Voxel Sandbox Template — Design Documentation
+# Voxel Sandbox — Design & Architecture
 
-> The single source of truth for how this template is designed and built.
-> Read this before adding or changing systems. Keep it updated as the template evolves.
+> How this game is actually built. Read before changing a system; keep it current.
+> (This replaces the old prototype-era design doc — there is no node-per-block world anymore.)
 
-## 1. Vision
+## 1. What it is
+A Minecraft-style 3D voxel **survival sandbox** on Summer Engine (Godot 4.6, GDScript only,
+Forward+ / D3D12, Jolt physics). Build & break a streamed voxel world, gather/craft/smelt up
+a tool tier, survive escalating night sieges, explore biomes with weather and fauna.
 
-A clean, well-documented **Minecraft-style 3D voxel sandbox template** for Summer Engine
-(Godot 4.6, GDScript). It is **not a finished game** — it is a foundation other developers
-clone and build their own voxel games on top of. Priorities, in order:
+**Convention:** 1 block = 1 world unit (metre). The player is 1.8 m tall (eye 1.5 m); all
+object sizes proportion against that — see the `world-scale-reference` notes.
 
-1. **Readable** — every system is small, commented, and easy to find.
-2. **Extensible** — adding a block type, changing world generation, or swapping the
-   controller should each be a localized, obvious change.
-3. **Runnable from the first clone** — open in Summer Engine, press Play, walk around.
+## 2. World (`scripts/world/`)
+- **`ChunkManager`** streams 16×16×256 chunks around the player (radius = `render_radius`,
+  default 3, settings-adjustable). Terrain is a **pure function** of world coords (layered
+  FastNoiseLite + integer hashes) plus a `overrides` dict of player edits, so any voxel is
+  sample-able even if unloaded. Owns biome/height/tree queries and chest storage.
+- **`Chunk`** builds one chunk on a worker thread: a per-build voxel cache (computed once,
+  reused across edits), **greedy meshing** (merged faces, culled hidden faces) into an
+  opaque surface + a translucent water surface, plus a trimesh collider, applied on the main
+  thread (budgeted per frame). All chunks **share** one solid + one water material.
+- **`VoxelTypes`** — the single block/item registry: ids, atlas tile, colour, hardness, drop,
+  mine-tier, food value, flags. Add a block here + give it an atlas tile (8×8 grid). 29 blocks
+  (id 0–28), 8 items (id ≥ 100).
+- **Trees** are 3D models placed per-chunk via MultiMesh (a 2-block minable stump is the only
+  tree voxel). **`weather.gd`** drives continuous climate → precipitation (GPU particles),
+  sandstorms, tsunamis. **`world_save.gd`** persists overrides/chests/player/time/weather.
 
-## 2. Core Pillars
+## 3. Player (`scripts/player/`)
+First-person `CharacterBody3D`. Walk/run/jump/fly/swim, auto-step, mouse look (`mouse_sens`,
+settings-scaled). Raycast targeting (reach 6). Left = mine (tier-gated, crack overlay,
+particles), right = place (validated). Mining/combat swing both the third-person rig
+(AnimationPlayer clips) and the first-person viewmodel (procedural bob/sway/swing + a
+placement push). Inventory (27 + hotbar), hunger, armor, death/respawn. `weapon_holder` /
+`tool_holder` equip models to the hand bone; `WeaponRegistry` holds stats.
 
-| Pillar | What it means |
-|---|---|
-| **Build & break** | Place and remove blocks anywhere with instant feedback. |
-| **Free movement** | First-person walk/run/jump on the ground; toggle creative fly. |
-| **Data-driven blocks** | Block types defined in one registry, not hardcoded across the code. |
-| **Asset-ready** | A clear pipeline + folder layout for textures, models, audio. |
+## 4. Entities (`scripts/entities/`)
+- **`hostile_mob`** — night zombies (player GLB + procedural shamble, chase/attack/leap, hit
+  flash, death topple). **`creature` + `fauna`** — biome-spawned animals with ground/air/water
+  procedural locomotion or baked clips, culled by distance. (`animal.gd` is legacy/unused.)
 
-## 3. Tech Baseline
+## 5. UI, core, audio (`scripts/ui`, `scripts/core`)
+HUD, minimap, crafting/chest screens, main + pause menus, **settings** (`GameSettings` →
+`user://settings.cfg`). `main.gd` wires the scene; `advancements.gd` tracks goals;
+`audio_ducker.gd` creates Music/Ambient/SFX buses, ducks on impact, owns the underwater
+low-pass and the settings volume hooks. SFX play through a pooled voice set; mob audio is
+positional.
 
-- **Engine:** Summer Engine (Godot 4.6), Forward+ renderer, D3D12 on Windows.
-- **Language:** **GDScript only** (no C#/.NET — the `[dotnet]` config has been removed).
-- **Physics:** Jolt Physics (3D).
-- **Coordinate convention:** 1 block = 1 world unit. Block at grid cell `(x,y,z)` is centered
-  at `Vector3(x,y,z)`; its top face is at `y + 0.5`.
+## 6. Conventions
+- GDScript only; typed vars; `snake_case` members, `PascalCase` `class_name`; tabs.
+- One responsibility per script; prefer composition. Gameplay constants as `const` at the top.
+- Reference scripts via `preload("res://…")` where `class_name` registration order could bite.
+- New `class_name` scripts may need a filesystem rescan before refs resolve in the editor.
 
-## 4. Systems
-
-### 4.1 Player Controller (`scripts/player/`)
-First-person `CharacterBody3D`.
-- **Walk/Run:** WASD relative to facing; optional sprint.
-- **Look:** mouse-captured pitch (clamped ±85°) + yaw.
-- **Jump/Gravity:** uses `ProjectSettings` default gravity; jump only when on floor.
-- **Creative fly:** `F` toggles; Space/Shift for up/down; gravity disabled while flying.
-- **Targeting:** forward `RayCast3D` (reach ~6 units) identifies the block under the crosshair.
-
-### 4.2 Voxel World (`scripts/world/`)
-Authoritative store of placed blocks.
-- Blocks live in a `Dictionary` keyed by `Vector3i` cell → block instance/metadata.
-- Each block is a `StaticBody3D` (BoxMesh + BoxShape3D) carrying its `cell` in metadata, so a
-  raycast hit maps straight back to a grid cell.
-- `add_block(cell, type)`, `remove_block(cell)`, `has_block(cell)`.
-- Initial floor is generated procedurally (flat grid) — the hook where real terrain generation
-  plugs in later (see PLAN Phase 2).
-- **Scaling note:** the starter uses one node per block (simple, readable). The documented
-  upgrade path is **chunked meshing** for large worlds — see PLAN Phase 2.
-
-### 4.3 Block Registry (`scripts/core/`) — *planned*
-A single resource/script that defines every block type: id, display name, color/material,
-texture references, and flags (solid, breakable). Place/break and the hotbar read from here so
-new blocks require **one** edit.
-
-### 4.4 Interaction
-- **Left click** → break the targeted block.
-- **Right click** → place the selected block on the face the ray hit (cell + hit normal).
-- **1–5** → select active block type (drives the hotbar).
-
-### 4.5 UI (`scripts/ui/`)
-- Crosshair, a hotbar showing the selectable block types, and an on-screen controls hint.
-- Built with Control nodes under a `CanvasLayer`.
-
-## 5. Asset Pipeline
-
-Assets are produced two ways and **both land in `assets/`** (see `assets/README.md`):
-1. **Generated** via the Summer MCP / CLI (`summer_generate_image`, `summer_generate_3d`,
-   `summer_generate_audio`, `summer_import_*`).
-2. **Hand-made** in the Summer studio and imported manually when generation isn't a good fit.
-
-Voxel textures use a **texture atlas** (one image, many block faces) referenced by the block
-registry, to keep draw calls and materials low.
-
-## 6. Project Structure
-
-```
-assets/        textures/ models/ materials/ audio/   — all art & sound, organized by type
-docs/          DESIGN.md (this file) + PLAN.md
-scenes/        .tscn scenes (main, player, ui, …)
-scripts/       core/ player/ world/ ui/              — GDScript by responsibility
-main.tscn      entry scene (set as project main scene)
-project.godot  Godot project config (GDScript, Jolt, Forward+)
-```
-
-> **Prototype note:** the first runnable prototype (`main.gd`, `player.gd`, `voxel_world.gd`)
-> currently lives at the project root. PLAN Phase 1–2 relocates these into `scripts/` and
-> `scenes/` and converts them into the data-driven systems described above.
-
-## 7. Conventions
-
-- **GDScript style:** typed variables, `snake_case` members, `PascalCase` for `class_name`.
-  Tabs for indentation (Godot default).
-- **One responsibility per script.** Prefer composition (child nodes) over giant scripts.
-- **No magic numbers** — gameplay constants go at the top of their script as `const`.
-- **Reference scripts by `preload("res://…")`** when global `class_name` registration order
-  could bite (see the `main.gd` fix); otherwise `class_name` is fine.
-
-## 8. For Template Users (extension points)
-
+## 7. Extension points
 | Want to… | Change… |
 |---|---|
-| Add a block type | the **block registry** (one entry: id, color/texture, flags) |
-| Change the world shape | `VoxelWorld` generation hook (Phase 2 terrain generator) |
-| Retune movement | the `const` block at the top of the player controller |
-| Restyle the HUD | the UI scripts/scenes under `scripts/ui/` + `scenes/` |
-| Add assets | drop files into the matching `assets/` subfolder (see its README) |
+| Add a block/item | `VoxelTypes` (one entry) + an atlas tile |
+| Change terrain/biomes | the noise + `biome_at`/`surface_height` in `ChunkManager` |
+| Retune movement/look | the `const` block atop `player.gd` |
+| Add a creature | a `CREATURES` entry in `fauna.gd` + a model |
+| Restyle UI | `scripts/ui/` + `UITheme` |
+| Add a setting | `GameSettings` + a `UITheme.setting_row` in the two settings panels |

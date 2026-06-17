@@ -38,6 +38,7 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	add_child(preload("res://scripts/core/audio_ducker.gd").new())   # creates audio buses
+	GameSettings.apply_audio(get_tree())                              # saved volume levels
 	_build()
 	get_viewport().size_changed.connect(_layout_menu)
 	_layout_menu()
@@ -209,28 +210,40 @@ func _build_settings() -> void:
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 14)
 	box.add_child(vb)
+	GameSettings.load_cfg()
 	var title := Label.new()
 	title.text = "SETTINGS"
 	title.add_theme_font_size_override("font_size", 32)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(title)
-	var vol_lbl := Label.new()
-	vol_lbl.text = "Master Volume"
-	vb.add_child(vol_lbl)
-	var slider := HSlider.new()
-	slider.min_value = 0.0
-	slider.max_value = 1.0
-	slider.step = 0.05
-	slider.value = db_to_linear(AudioServer.get_bus_volume_db(0))
-	slider.custom_minimum_size = Vector2(320, 0)
-	slider.value_changed.connect(_on_volume)
-	vb.add_child(slider)
+	var pct := func(v): return "%d%%" % roundi(v * 100.0)
+	var dec := func(v): return "%.2fx" % v
+	var whole := func(v): return "%d" % int(v)
+	vb.add_child(UITheme.setting_row("Master", 0.0, 1.0, 0.05, GameSettings.master, pct, _mm_master))
+	vb.add_child(UITheme.setting_row("Music", 0.0, 1.0, 0.05, GameSettings.music, pct, _mm_music))
+	vb.add_child(UITheme.setting_row("Sound FX", 0.0, 1.0, 0.05, GameSettings.sfx, pct, _mm_sfx))
+	vb.add_child(UITheme.setting_row("Look speed", 0.3, 2.5, 0.05, GameSettings.sensitivity, dec, _mm_sens))
+	vb.add_child(UITheme.setting_row("View distance", 2, 8, 1, GameSettings.render_radius, whole, _mm_render))
 	var back := UITheme.make_button("BACK", "primary", Vector2(320, 0))
 	back.pressed.connect(_close_settings)
 	vb.add_child(back)
 
-func _on_volume(v: float) -> void:
-	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(v, 0.0001)))
+# Menu settings handlers — audio applies live (buses persist into the game); gameplay values
+# are stored + saved and applied when the gameplay scene starts (GameSettings.apply_gameplay).
+func _mm_master(v: float) -> void:
+	GameSettings.master = v; GameSettings.apply_audio(get_tree()); GameSettings.save_cfg()
+
+func _mm_music(v: float) -> void:
+	GameSettings.music = v; GameSettings.apply_audio(get_tree()); GameSettings.save_cfg()
+
+func _mm_sfx(v: float) -> void:
+	GameSettings.sfx = v; GameSettings.apply_audio(get_tree()); GameSettings.save_cfg()
+
+func _mm_sens(v: float) -> void:
+	GameSettings.sensitivity = v; GameSettings.save_cfg()
+
+func _mm_render(v: float) -> void:
+	GameSettings.render_radius = int(v); GameSettings.save_cfg()
 
 func _close_settings() -> void:
 	if _settings:

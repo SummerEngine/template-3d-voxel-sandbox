@@ -16,6 +16,46 @@ const TreeModels := preload("res://scripts/world/tree_models.gd")
 # resource for exported builds where res:// PNGs aren't on disk.
 static var _atlas_cache: Texture2D
 
+# One material instance shared by EVERY chunk (solid + water), built lazily on the main
+# thread the first time a chunk applies its mesh. Sharing lets the renderer batch chunks
+# and means we never allocate/compile a material per chunk build during streaming.
+static var _solid_mat: Material
+static var _water_mat: ShaderMaterial
+static var _fallback_mat: StandardMaterial3D
+
+static func _shared_solid_material(atlas_tex: Texture2D) -> Material:
+	if _solid_mat != null:
+		return _solid_mat
+	const SHADER_PATH := "res://assets/materials/block_atlas.gdshader"
+	if atlas_tex != null and ResourceLoader.exists(SHADER_PATH):
+		var sm := ShaderMaterial.new()
+		sm.shader = load(SHADER_PATH)
+		sm.set_shader_parameter("atlas", atlas_tex)
+		_solid_mat = sm
+	else:
+		_solid_mat = _shared_fallback_material()
+	return _solid_mat
+
+static func _shared_fallback_material() -> StandardMaterial3D:
+	if _fallback_mat == null:
+		var fb := StandardMaterial3D.new()
+		fb.vertex_color_use_as_albedo = true
+		fb.roughness = 1.0
+		fb.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_fallback_mat = fb
+	return _fallback_mat
+
+static func _shared_water_material(atlas_tex: Texture2D) -> ShaderMaterial:
+	if _water_mat != null:
+		return _water_mat
+	const WATER_SHADER := "res://assets/materials/water.gdshader"
+	if atlas_tex != null and ResourceLoader.exists(WATER_SHADER):
+		var wm := ShaderMaterial.new()
+		wm.shader = load(WATER_SHADER)
+		wm.set_shader_parameter("atlas", atlas_tex)
+		_water_mat = wm
+	return _water_mat
+
 static func _atlas_texture(path: String) -> Texture2D:
 	if _atlas_cache != null:
 		return _atlas_cache              # cached once loaded; retries until then
@@ -46,6 +86,7 @@ var _top := 0
 var _sx := CW + 2                # cache stride in x (border on both sides)
 var _sz := CD + 2                # cache stride in z
 var _collision_faces := PackedVector3Array()   # solid faces only (water excluded)
+var _built_shape: ConcavePolygonShape3D        # trimesh collider, built in _prepare (off-thread for async)
 var _water_arrays: Array = []                  # water mesh surface (separate, translucent)
 var _tree_sites: Array = []                    # [{lx,lz,sc,kind,rot,h}] -> per-chunk 3D-tree MultiMesh
 var _foliage: Node3D                           # holds this chunk's tree/palm MultiMeshInstance3D nodes
@@ -58,6 +99,8 @@ var _build_ready := false
 var _applied := false
 var _async_arrays: Array = []
 var _overrides_snapshot: Dictionary = {}
+var _rebuilding := false      # in-flight build is an edit rebuild (chunk already has geometry)
+var _dirty := false           # another edit landed mid-build — rebuild again once this one applies
 
 func _ready() -> void:
 	set_process(false)   # the manager triggers the build: build() (sync) or start_async()
@@ -86,6 +129,8 @@ func build() -> void:
 	_apply(_prepare(manager.overrides))
 	_build_ready = false
 	_applied = true
+	_rebuilding = false
+	_dirty = false
 	set_process(false)
 
 func start_async() -> void:
@@ -95,19 +140,40 @@ func start_async() -> void:
 	set_process(true)
 	_task_id = WorkerThreadPool.add_task(_thread_build)
 
+## Edit-triggered rebuild (block placed/broken): do the heavy compute + collider build on a
+## worker thread and apply on a later, budgeted frame — so an edit never freezes the main
+## thread. The OLD mesh/collider stay live until the new one is applied (no collision gap),
+## and rapid edits coalesce via _dirty instead of stacking worker tasks.
+func rebuild_async() -> void:
+	if _task_id != -1 or _build_ready:
+		_dirty = true                                        # a build is in flight/pending — rebuild after
+		return
+	_dirty = false
+	_rebuilding = true                                       # keep current geometry until the new build lands
+	_overrides_snapshot = manager.overrides.duplicate()
+	set_process(true)
+	_task_id = WorkerThreadPool.add_task(_thread_build)
+
 func _thread_build() -> void:
 	_async_arrays = _prepare(_overrides_snapshot)            # worker thread — NO scene access
 	_build_ready = true                                      # publish last
 
 func _process(_delta: float) -> void:
-	if _build_ready and not _applied and manager.consume_apply_budget():
+	if not _build_ready:
+		return
+	if (not _applied or _rebuilding) and manager.consume_apply_budget():
 		if _task_id != -1:
 			WorkerThreadPool.wait_for_task_completion(_task_id)   # barrier before reading results
 			_task_id = -1
 		_apply(_async_arrays)
 		_async_arrays = []
 		_applied = true
-		set_process(false)
+		_build_ready = false
+		_rebuilding = false
+		if _dirty:
+			rebuild_async()                                  # a further edit landed mid-build — go again
+		else:
+			set_process(false)
 
 func _exit_tree() -> void:
 	if _task_id != -1:                                       # never free the node mid-task
@@ -138,7 +204,18 @@ func _prepare(overrides_src: Dictionary) -> Array:
 	# water above the floor goes unmeshed -> empty pits you fall into.
 	var top: int = mini(maxi(max_y + manager.TREE_H + 1, manager.SEA_LEVEL + 1), manager.WORLD_H)
 	_fill_cache(ox, oz, top, overrides_src)
-	return _greedy(top)
+	var arrays := _greedy(top)
+	# Build the trimesh collider HERE so the heavy BVH construction runs on the worker thread
+	# for async builds (streaming + edit rebuilds) instead of hitching the main thread. _apply
+	# just attaches the finished shape. (Resource built off-tree, only touched by the scene on
+	# the main thread in _apply after a task barrier — the safe threaded-build pattern.)
+	_built_shape = null
+	if _collision_faces.size() >= 3:
+		var shape := ConcavePolygonShape3D.new()
+		shape.set_faces(_collision_faces)
+		shape.backface_collision = true   # faces use mixed winding; collide from both sides
+		_built_shape = shape
+	return arrays
 
 ## Main-thread scene mutation: swap in the new mesh + collider built from `arrays`.
 func _apply(arrays: Array) -> void:
@@ -152,50 +229,31 @@ func _apply(arrays: Array) -> void:
 		_build_foliage()       # empty terrain -> also drop any trees from a previous build
 		return
 
-	const SHADER_PATH := "res://assets/materials/block_atlas.gdshader"
-	const WATER_SHADER := "res://assets/materials/water.gdshader"
 	const ATLAS_PATH  := "res://assets/textures/blocks/atlas.png"
 	var atlas_tex := _atlas_texture(ATLAS_PATH)
-	var has_atlas := ResourceLoader.exists(SHADER_PATH) and atlas_tex != null
 
 	var am := ArrayMesh.new()
 	var surf := 0
-	# Surface 0: opaque solid blocks.
+	# Surface 0: opaque solid blocks — every chunk shares ONE solid material (and one water
+	# material below) so the renderer batches them and no material is allocated per build.
 	if not arrays.is_empty():
 		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-		var mat: Material
-		if has_atlas:
-			var sm := ShaderMaterial.new()
-			sm.shader = load(SHADER_PATH)
-			sm.set_shader_parameter("atlas", atlas_tex)
-			mat = sm
-		else:
-			var fb := StandardMaterial3D.new()
-			fb.vertex_color_use_as_albedo = true
-			fb.roughness = 1.0
-			fb.cull_mode = BaseMaterial3D.CULL_DISABLED
-			mat = fb
-		am.surface_set_material(surf, mat)
+		am.surface_set_material(surf, _shared_solid_material(atlas_tex))
 		surf += 1
 	# Next surface: translucent, rippling water (rendered after the opaque blocks).
-	if not _water_arrays.is_empty() and has_atlas and ResourceLoader.exists(WATER_SHADER):
+	var water_mat := _shared_water_material(atlas_tex)
+	if not _water_arrays.is_empty() and water_mat != null:
 		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _water_arrays)
-		var wm := ShaderMaterial.new()
-		wm.shader = load(WATER_SHADER)
-		wm.set_shader_parameter("atlas", atlas_tex)
-		am.surface_set_material(surf, wm)
+		am.surface_set_material(surf, water_mat)
 
 	_mesh_instance = MeshInstance3D.new()
 	_mesh_instance.mesh = am
 	add_child(_mesh_instance)
 
-	if _collision_faces.size() >= 3:
+	if _built_shape != null:
 		_body = StaticBody3D.new()
 		var cs := CollisionShape3D.new()
-		var shape := ConcavePolygonShape3D.new()
-		shape.set_faces(_collision_faces)
-		shape.backface_collision = true   # faces use mixed winding; collide from both sides
-		cs.shape = shape
+		cs.shape = _built_shape            # trimesh already built in _prepare (off-thread for async)
 		_body.add_child(cs)
 		add_child(_body)
 

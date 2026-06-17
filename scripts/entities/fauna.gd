@@ -49,6 +49,12 @@ func setup(w, p) -> void:
 
 func _ready() -> void:
 	_rng.randomize()
+	# Warm the model cache once at startup so the first in-game spawn of each species doesn't
+	# pay a synchronous GLB disk-load mid-gameplay (that was the recurring spawn-time hitch).
+	for c in CREATURES:
+		var p := String(c.get("model", ""))
+		if p != "" and ResourceLoader.exists(p):
+			load(p)
 	for i in range(6):                  # a little life at the spawn area straight away
 		_try_spawn()
 

@@ -14,14 +14,18 @@ const WORLD_H := 256
 const SEA_LEVEL := 40          # water fills below this: oceans, lakes, rivers
 const MOUNTAIN_ROCK := 64      # bare-stone peaks at/above this height
 const SNOW_LEVEL := 82         # snow-capped peaks at/above this height
-const RENDER_RADIUS := 3       # chunks around the player (longer view distance)
+const RENDER_RADIUS := 3       # default chunks around the player; render_radius (settings) overrides
+var render_radius := RENDER_RADIUS
 const LOADS_PER_FRAME := 3     # async chunk builds dispatched per frame (they run in parallel)
 const APPLIES_PER_FRAME := 2   # finished chunk meshes applied to the scene per frame (smooths pop-in)
 
 const CAVE_SQUASH := 1.4       # >1 flattens caves vertically
 const CAVE_THRESHOLD := 0.55   # carve where 3D cave noise exceeds this
 const TREE_R := 3              # max tree canopy radius (jungle)
-const TREE_H := 10             # vertical room reserved above ground for a tree (canopy clearance)
+# Vertical voxel headroom a chunk meshes/scans above ground for a tree. Canopies are now 3D
+# models (not voxels), so the only tree voxel is the 2-block stump — this just needs to clear
+# that (was 10 from the old voxel-canopy era, which meshed ~6 empty rows per column for nothing).
+const TREE_H := 4
 const TREE_STUMP_H := 2        # minable log stump; the trunk+canopy is a 3D model (keep == Chunk.STUMP_H)
 
 var player: Node3D
@@ -338,10 +342,16 @@ func is_chunk_ready(wx: int, wz: int) -> bool:
 	var c := Vector2i(chunk_x(wx), chunk_z(wz))
 	return chunks.has(c) and is_instance_valid(chunks[c]) and chunks[c].is_ready()
 
+## Settings hook: change how many chunks stream around the player. Invalidating _center forces
+## the next _process to re-queue the new rings and unload anything now out of range.
+func set_render_radius(r: int) -> void:
+	render_radius = clampi(r, 2, 8)
+	_center = Vector2i(999999, 999999)
+
 func _refresh_queue(center: Vector2i) -> void:
 	var list: Array = []
-	for dz in range(-RENDER_RADIUS, RENDER_RADIUS + 1):
-		for dx in range(-RENDER_RADIUS, RENDER_RADIUS + 1):
+	for dz in range(-render_radius, render_radius + 1):
+		for dx in range(-render_radius, render_radius + 1):
 			var c := Vector2i(center.x + dx, center.y + dz)
 			if not chunks.has(c):
 				list.append(c)
@@ -351,7 +361,7 @@ func _refresh_queue(center: Vector2i) -> void:
 func _unload_far(center: Vector2i) -> void:
 	var remove: Array = []
 	for c in chunks.keys():
-		if absi(c.x - center.x) > RENDER_RADIUS + 1 or absi(c.y - center.y) > RENDER_RADIUS + 1:
+		if absi(c.x - center.x) > render_radius + 1 or absi(c.y - center.y) > render_radius + 1:
 			remove.append(c)
 	for c in remove:
 		if is_instance_valid(chunks[c]):
@@ -376,10 +386,60 @@ func _load(c: Vector2i, sync := false) -> void:
 	else:
 		ch.start_async()
 
+# --- torches (placeable light props; not voxels) ---------------------------------
+var torches: Dictionary = {}   # Vector3i cell -> StaticBody3D (light + emissive head)
+
+func has_torch(cell: Vector3i) -> bool:
+	return torches.has(cell)
+
+## Place a torch light at a cell (returns false if one is already there). The torch is a
+## small clickable body carrying a warm OmniLight3D, so caves/nights can actually be lit.
+func place_torch(cell: Vector3i) -> bool:
+	if torches.has(cell):
+		return false
+	var t := _make_torch(cell)
+	t.position = Vector3(cell) + Vector3(0.5, 0.5, 0.5)
+	add_child(t)
+	torches[cell] = t
+	return true
+
+func remove_torch(cell: Vector3i) -> bool:
+	if not torches.has(cell):
+		return false
+	if is_instance_valid(torches[cell]):
+		torches[cell].queue_free()
+	torches.erase(cell)
+	return true
+
+# A non-colliding prop (so it never blocks movement); removal is by targeted cell, not a raycast.
+func _make_torch(_cell: Vector3i) -> Node3D:
+	var root := Node3D.new()
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(0.13, 0.42, 0.13)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.5, 0.32, 0.14)
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.62, 0.22)
+	mat.emission_energy_multiplier = 2.2
+	bm.material = mat
+	mi.mesh = bm
+	root.add_child(mi)
+	var light := OmniLight3D.new()
+	light.light_energy = 2.6
+	light.omni_range = 9.5
+	light.light_color = Color(1.0, 0.68, 0.34)
+	light.position = Vector3(0, 0.2, 0)
+	light.shadow_enabled = false
+	root.add_child(light)
+	return root
+
+## Block edit: rebuild off the main thread so placing/breaking never freezes the frame
+## (the heavy remesh + collider now run on a worker; the result applies a frame or two later).
 func _rebuild(cx: int, cz: int) -> void:
 	var c := Vector2i(cx, cz)
 	if chunks.has(c) and is_instance_valid(chunks[c]):
-		chunks[c].build()
+		chunks[c].rebuild_async()
 
 ## Force every loaded chunk to remesh (used after bulk-applying a loaded save).
 func rebuild_all() -> void:

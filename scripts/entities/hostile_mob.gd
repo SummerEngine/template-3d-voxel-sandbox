@@ -1,5 +1,6 @@
 class_name HostileMob
 extends CharacterBody3D
+# Night/cave enemy with a jointed rig (walks, reaches, grabs).
 
 ## Night-time enemy. Uses the player's own textured zombie models (a green shambler and an
 ## armoured one) as the visual, scaled to size and driven by a procedural whole-body shamble
@@ -21,8 +22,10 @@ const SIGHT_RANGE := 20.0
 const ATTACK_RANGE := 1.6
 const ATTACK_CD := 1.0
 const DAMAGE := 1
+const ZOMBIE_HEIGHT := 2.0       # fit target on the BIND/REST pose; animated stance renders ~1.5 m (player 1.8)
 const HUNCH := -0.18              # permanent forward lean (rad) — a shambling, lunging posture
-const ARM_REST := -1.45           # blocky-rig fallback: arms held straight out forward
+const ARM_REST := -1.45           # arms held straight out forward (the reaching pose)
+const RIG_HUNCH := -0.14          # resting forward lean — a shambling posture
 
 var gravity: float = float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
 var health := 10
@@ -38,7 +41,12 @@ var _rng := RandomNumberGenerator.new()
 var _flash_meshes: Array = []
 var _model: Node3D                     # visual root, lurched/swayed while shambling
 var _model_rest_y := 0.0               # its resting local height (feet on the ground)
-var _articulated := false              # true -> code-built blocky rig (swing limbs); false -> GLB shamble
+var _articulated := false              # true -> code-built blocky rig (swing limbs)
+var _anim_player: AnimationPlayer      # the rigged GLB's clip player (null -> procedural rig)
+var _clip_walk := ""
+var _clip_attack := ""
+var _clip_idle := ""
+var _attacking := false                # true while the attack clip plays through
 var _leg_l: Node3D                     # blocky-rig joints (only used when _articulated)
 var _leg_r: Node3D
 var _arm_l: Node3D
@@ -49,18 +57,38 @@ var _snd_groan: AudioStreamPlayer3D    # positional zombie sounds (come from the
 var _snd_attack: AudioStreamPlayer3D
 var _snd_hurt: AudioStreamPlayer3D
 var _groan_timer := 0.0
+var _voice_pitch := 1.0                 # per-mob base pitch so each zombie sounds distinct
+var _dying := false                     # true once killed — plays a topple before despawning
+var _col: CollisionShape3D              # body collider, disabled on death so corpses don't block
+var brute := false                      # set by main.gd: bigger, tougher, slower, knockback-resistant
+var runner := false                     # set by main.gd: lean, faster, frailer — keeps the horde varied
+var day_night                           # DayNight ref (siege mobs only) — they burn in daylight
+var _size := 1.0                        # body scale (brutes are larger)
+var _speed_mul := 1.0                   # per-type chase speed multiplier (brute slow, runner fast)
+var _knockback := Vector3.ZERO          # decaying shove from a player hit
+var _burning := false                   # caught in daylight: smoking, ticking damage, about to drop
+var _burn_t := 0.0
+var _burn_dmg_t := 0.0
+var _sun_check_t := 0.0                  # throttles the daylight-exposure test
+var _fire: CPUParticles3D               # ember/smoke VFX while burning
 
 func _ready() -> void:
 	add_to_group("mob")
 	_rng.randomize()
+	if brute:
+		_size = 1.5                # a looming, slower heavy that anchors the horde
+		_speed_mul = 0.6           # heavy and slow — you can outrun it, not ignore it
+	elif runner:
+		_size = 0.95               # lean and wiry
+		_speed_mul = 1.45          # sprints — it closes the gap fast
 
-	var col := CollisionShape3D.new()
+	_col = CollisionShape3D.new()
 	var cap := CapsuleShape3D.new()
-	cap.height = 1.6
-	cap.radius = 0.35
-	col.shape = cap
-	col.position = Vector3(0, 0.8, 0)
-	add_child(col)
+	cap.height = ZOMBIE_HEIGHT * _size      # match the visual fit so headshots register
+	cap.radius = 0.32 * _size
+	_col.shape = cap
+	_col.position = Vector3(0, ZOMBIE_HEIGHT * 0.5 * _size, 0)   # centred so the feet rest on y=0
+	add_child(_col)
 
 	_build_visual()
 	_setup_sounds()
@@ -72,6 +100,9 @@ func _setup_sounds() -> void:
 	_snd_attack = _make_snd3d("res://assets/audio/sfx/mobs/zombie_attack.mp3", -1.0)
 	_snd_hurt = _make_snd3d("res://assets/audio/sfx/mobs/zombie_hurt.mp3", -2.0)
 	_groan_timer = _rng.randf_range(1.0, 4.0)
+	_voice_pitch = _rng.randf_range(0.82, 1.12)   # this zombie's individual voice register
+	if brute:
+		_voice_pitch *= 0.65                       # brutes growl deeper
 
 func _make_snd3d(path: String, vol_db: float) -> AudioStreamPlayer3D:
 	var p := AudioStreamPlayer3D.new()
@@ -85,70 +116,173 @@ func _make_snd3d(path: String, vol_db: float) -> AudioStreamPlayer3D:
 	add_child(p)
 	return p
 
-## Build the visual: prefer the player's textured zombie GLB (scaled + hunched, shamble-driven);
-## fall back to the articulated blocky rig if no model loads.
+const ANIMATED_MODEL := "res://assets/models/mobs/animated_zombie.glb"
+
+## The zombie is a CODE-BUILT, jointed blocky rig (real swinging limbs, glowing eyes) — it
+## matches the voxel art, animates a proper stride/reach/grab, and has none of the imported
+## skinned-GLB pathologies (the provided GLB rendered a 100 m giant / flew off its body). The
+## GLB loader below is kept dead-but-available; _build_visual deliberately uses the rig.
 func _build_visual() -> void:
-	# Weighted pick: usually the natural-posed green zombie, occasionally the armoured one.
-	var path: String = MODEL_PATHS[0]
-	if _rng.randf() < 0.35 and ResourceLoader.exists(MODEL_PATHS[1]):
-		path = MODEL_PATHS[1]
-	if force_model >= 0 and force_model < MODEL_PATHS.size():
-		path = MODEL_PATHS[force_model]
-	if not ResourceLoader.exists(path):
-		path = MODEL_PATHS[0] if ResourceLoader.exists(MODEL_PATHS[0]) else ""
-
-	if path != "":
-		var packed := load(path) as PackedScene
-		if packed:
-			var model := packed.instantiate() as Node3D
-			if model:
-				add_child(model)
-				_fit_model(model, 1.85)
-				model.rotation.y = PI            # GLBs face +z; flip so the front faces look_at (-z)
-				model.rotation.x = HUNCH         # permanent forward hunch
-				_model = model
-				_model_rest_y = model.position.y
-				_articulated = false
-				_flash_meshes = model.find_children("*", "MeshInstance3D", true, false)
-				return
-
 	_build_zombie_rig()
 
-## Fallback: a Minecraft-style articulated blocky zombie with real swinging limbs.
+func _build_animated_model() -> bool:
+	if not ResourceLoader.exists(ANIMATED_MODEL):
+		return false
+	var packed := load(ANIMATED_MODEL) as PackedScene
+	if packed == null:
+		return false
+	var model := packed.instantiate() as Node3D
+	if model == null:
+		return false
+	add_child(model)
+	var players := model.find_children("*", "AnimationPlayer", true, false)
+	if players.is_empty():
+		model.queue_free()
+		return false
+	_anim_player = players[0] as AnimationPlayer
+	model.rotation.y = PI                 # GLBs face +z; flip so the front faces look_at (-z)
+	_model = model
+	_articulated = false
+	_flash_meshes = model.find_children("*", "MeshInstance3D", true, false)
+	# Match clips by keyword (the GLB's names are descriptive, e.g. "generate walking motion…").
+	var list := _anim_player.get_animation_list()
+	_clip_walk = _find_clip(list, ["walk", "run"])
+	_clip_attack = _find_clip(list, ["attack", "scream", "punch", "hit", "bite"])
+	_clip_idle = _find_clip(list, ["idle"])
+	if _clip_idle == "":
+		_clip_idle = _clip_walk
+	_set_loop(_clip_walk, true)
+	_set_loop(_clip_idle, true)
+	_set_loop(_clip_attack, false)
+	if _clip_idle != "":
+		_anim_player.play(_clip_idle)
+	_fit_skinned(model, ZOMBIE_HEIGHT * _size)
+	return true
+
+## AABB-based fitting (_fit_model) is WRONG for this skinned GLB: its mesh stores a tiny
+## internal-scale AABB (~0.0156 m), so dividing target/aabb yields a ~96x scale that drives
+## the SKELETON to ~108 m tall — the "giant zombie" bug. Scale by the skeleton's BIND/REST
+## bone span instead, measured synchronously: the rest pose is static (no animation/physics
+## frame race) and clean (no transient pose extremes that fling the model into the sky).
+func _fit_skinned(model: Node3D, target_h: float) -> void:
+	var skels := model.find_children("*", "Skeleton3D", true, false)
+	if skels.is_empty():
+		_fit_model(model, target_h)        # no skeleton: AABB fit is fine for a static mesh
+		_model_rest_y = model.position.y
+		return
+	var skel := skels[0] as Skeleton3D
+	# Rest-pose bone origins in MODEL space (handles any internal Armature scale between them).
+	var rel := model.global_transform.affine_inverse() * skel.global_transform
+	var lo := 1.0e9
+	var hi := -1.0e9
+	for i in skel.get_bone_count():
+		var y: float = (rel * _bone_global_rest(skel, i).origin).y
+		lo = minf(lo, y)
+		hi = maxf(hi, y)
+	var span := hi - lo
+	if span <= 0.001:
+		return
+	var s := target_h / span
+	model.scale = Vector3(s, s, s)
+	model.position.y = -lo * s              # lowest bone (feet) now rests at the mob origin (y=0)
+	_model_rest_y = model.position.y
+	# This GLB's skinned mesh stores a near-degenerate AABB (~2 cm), so Godot can frustum-cull
+	# the visible body when its tiny box leaves view (zombie "vanishes"). A cull margin spanning
+	# the real body keeps it drawn whenever any part is on screen.
+	for m in model.find_children("*", "MeshInstance3D", true, false):
+		(m as GeometryInstance3D).extra_cull_margin = maxf(2.0, target_h)
+
+## Accumulate local bone rests up the parent chain → the bind-pose transform in skeleton space.
+func _bone_global_rest(skel: Skeleton3D, idx: int) -> Transform3D:
+	var t := skel.get_bone_rest(idx)
+	var p := skel.get_bone_parent(idx)
+	while p != -1:
+		t = skel.get_bone_rest(p) * t
+		p = skel.get_bone_parent(p)
+	return t
+
+## Match by keyword in PRIORITY order: try the first keyword across all clips, then the next,
+## so "attack" wins over the "scream" fallback regardless of clip order in the file.
+func _find_clip(list: PackedStringArray, keys: Array) -> String:
+	for k in keys:
+		for n in list:
+			if String(n).to_lower().contains(k):
+				return n
+	return ""
+
+func _set_loop(clip: String, on: bool) -> void:
+	if clip == "" or _anim_player == null or not _anim_player.has_animation(clip):
+		return
+	var a := _anim_player.get_animation(clip)
+	if a:
+		a.loop_mode = Animation.LOOP_LINEAR if on else Animation.LOOP_NONE
+
 func _build_zombie_rig() -> void:
 	var rig := Node3D.new()
 	rig.name = "ZombieRig"
 	add_child(rig)
 
-	var skin := Color(0.36, 0.56, 0.30)
+	# Per-type palette + build width so the horde reads as varied at a glance.
+	var skin := Color(0.36, 0.56, 0.30)   # normal: rotting green
 	var shirt := Color(0.27, 0.36, 0.42)
 	var pants := Color(0.24, 0.22, 0.32)
+	var w := 1.0                          # torso/limb width factor
+	if brute:
+		skin = Color(0.30, 0.40, 0.22); shirt = Color(0.19, 0.21, 0.20); pants = Color(0.15, 0.14, 0.18)
+		w = 1.18                          # thick-set heavy
+	elif runner:
+		skin = Color(0.52, 0.60, 0.40); shirt = Color(0.42, 0.39, 0.34); pants = Color(0.27, 0.26, 0.30)
+		w = 0.8                           # lean and wiry
 	_flash_meshes = []
 
-	_box(rig, Vector3(0.52, 0.75, 0.28), Vector3(0, 1.125, 0), shirt)
-	_box(rig, Vector3(0.50, 0.50, 0.50), Vector3(0, 1.72, 0), skin)
-	_eye(rig, Vector3(-0.12, 1.78, 0.255))
-	_eye(rig, Vector3(0.12, 1.78, 0.255))
-	_arm_l = _limb(rig, Vector3(0.18, 0.72, 0.20), Vector3(-0.36, 1.45, 0), skin)
-	_arm_r = _limb(rig, Vector3(0.18, 0.72, 0.20), Vector3(0.36, 1.45, 0), skin)
+	_box(rig, Vector3(0.52 * w, 0.75, 0.28 * w), Vector3(0, 1.125, 0), shirt)   # torso
+	_box(rig, Vector3(0.50, 0.50, 0.50), Vector3(0, 1.72, 0), skin)             # head
+	# Eyes on the FRONT (-Z = the look_at facing / movement direction), so it faces where it walks.
+	_eye(rig, Vector3(-0.12, 1.78, -0.255))
+	_eye(rig, Vector3(0.12, 1.78, -0.255))
+	# Arms pivot at the shoulders; ARM_REST swings them out front (toward -Z) — the reaching pose.
+	_arm_l = _limb(rig, Vector3(0.18 * w, 0.72, 0.20 * w), Vector3(-0.36 * w, 1.45, 0), skin)
+	_arm_r = _limb(rig, Vector3(0.18 * w, 0.72, 0.20 * w), Vector3(0.36 * w, 1.45, 0), skin)
 	_arm_l.rotation.x = ARM_REST
 	_arm_r.rotation.x = ARM_REST
-	_leg_l = _limb(rig, Vector3(0.20, 0.75, 0.22), Vector3(-0.14, 0.75, 0), pants)
-	_leg_r = _limb(rig, Vector3(0.20, 0.75, 0.22), Vector3(0.14, 0.75, 0), pants)
+	_leg_l = _limb(rig, Vector3(0.20 * w, 0.75, 0.22 * w), Vector3(-0.14, 0.75, 0), pants)
+	_leg_r = _limb(rig, Vector3(0.20 * w, 0.75, 0.22 * w), Vector3(0.14, 0.75, 0), pants)
 
-	rig.rotation.y = PI
+	rig.scale = Vector3.ONE * _size       # brutes/runners scaled (collider scaled to match in _ready)
 	_model = rig
 	_model_rest_y = 0.0
 	_articulated = true
+
+# Rig meshes share one material per colour across EVERY zombie (instead of a fresh
+# StandardMaterial3D per box per mob), so a 16-strong horde reuses ~4 materials, not ~112 —
+# far fewer state changes for the renderer. flash()/burning use material_override (a separate
+# slot), so they layer on top without disturbing these shared surface materials.
+static var _MAT_CACHE: Dictionary = {}
+static var _EYE_MAT: StandardMaterial3D
+
+static func _shared_mat(color: Color) -> StandardMaterial3D:
+	var key := color.to_rgba32()
+	if not _MAT_CACHE.has(key):
+		var m := StandardMaterial3D.new()
+		m.albedo_color = color
+		_MAT_CACHE[key] = m
+	return _MAT_CACHE[key]
+
+static func _shared_eye_mat() -> StandardMaterial3D:
+	if _EYE_MAT == null:
+		_EYE_MAT = StandardMaterial3D.new()
+		_EYE_MAT.albedo_color = Color(0.75, 0.05, 0.05)
+		_EYE_MAT.emission_enabled = true
+		_EYE_MAT.emission = Color(0.9, 0.1, 0.1)
+		_EYE_MAT.emission_energy_multiplier = 1.6
+	return _EYE_MAT
 
 func _box(parent: Node3D, size: Vector3, pos: Vector3, color: Color) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var bm := BoxMesh.new()
 	bm.size = size
 	mi.mesh = bm
-	var m := StandardMaterial3D.new()
-	m.albedo_color = color
-	mi.set_surface_override_material(0, m)
+	mi.set_surface_override_material(0, _shared_mat(color))
 	mi.position = pos
 	parent.add_child(mi)
 	_flash_meshes.append(mi)
@@ -159,12 +293,7 @@ func _eye(parent: Node3D, pos: Vector3) -> void:
 	var bm := BoxMesh.new()
 	bm.size = Vector3(0.10, 0.10, 0.02)
 	mi.mesh = bm
-	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0.75, 0.05, 0.05)
-	m.emission_enabled = true
-	m.emission = Color(0.9, 0.1, 0.1)
-	m.emission_energy_multiplier = 1.6
-	mi.set_surface_override_material(0, m)
+	mi.set_surface_override_material(0, _shared_eye_mat())
 	mi.position = pos
 	parent.add_child(mi)
 
@@ -176,9 +305,7 @@ func _limb(parent: Node3D, size: Vector3, joint_pos: Vector3, color: Color) -> N
 	var bm := BoxMesh.new()
 	bm.size = size
 	mi.mesh = bm
-	var m := StandardMaterial3D.new()
-	m.albedo_color = color
-	mi.set_surface_override_material(0, m)
+	mi.set_surface_override_material(0, _shared_mat(color))
 	mi.position = Vector3(0, -size.y * 0.5, 0)
 	pivot.add_child(mi)
 	_flash_meshes.append(mi)
@@ -235,25 +362,168 @@ func _clear_flash() -> void:
 		if is_instance_valid(m):
 			m.material_override = null
 
+## A burst of dark-red crumbs where the mob fell, parented to the scene so it outlives the
+## mob's despawn. One-shot create+free — death is rare, so no pooling needed.
+func _death_burst() -> void:
+	var parent := get_parent()
+	if parent == null:
+		return
+	var p := CPUParticles3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(0.12, 0.12, 0.12)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.45, 0.10, 0.10)
+	bm.material = mat
+	p.mesh = bm
+	p.amount = 16
+	p.one_shot = true
+	p.lifetime = 0.7
+	p.explosiveness = 0.95
+	p.direction = Vector3.UP
+	p.spread = 80.0
+	p.initial_velocity_min = 2.0
+	p.initial_velocity_max = 4.5
+	p.gravity = Vector3(0, -9.0, 0)
+	p.emitting = true
+	parent.add_child(p)
+	p.global_position = global_position + Vector3(0, 0.9 * _size, 0)
+	p.finished.connect(p.queue_free)
+
+## True when nothing covers this mob's column up to the surface — i.e. it stands in open sky.
+func _sky_exposed() -> bool:
+	if world == null:
+		return true
+	var sh: int = world.surface_height(int(global_position.x), int(global_position.z))
+	return global_position.y >= float(sh) - 1.0
+
+## Catch fire (daylight, or forced at dawn by main). Emits embers and ticks damage to death.
+func ignite() -> void:
+	if _burning or _dying:
+		return
+	_burning = true
+	_burn_t = 0.0
+	_burn_dmg_t = 0.4
+	_spawn_fire_vfx()
+
+func _burn_tick(delta: float) -> void:
+	_burn_t += delta
+	_burn_dmg_t -= delta
+	if _burn_dmg_t <= 0.0:
+		_burn_dmg_t = 0.5
+		flash()                          # sear flash each tick
+		health -= 2
+		if health <= 0:
+			_die()
+
+## Rising orange embers + a wisp of smoke, parented to the mob so the fire follows it.
+func _spawn_fire_vfx() -> void:
+	var p := CPUParticles3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(0.11, 0.11, 0.11)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 0.55, 0.12)
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.5, 0.1)
+	mat.emission_energy_multiplier = 2.5
+	bm.material = mat
+	p.mesh = bm
+	p.amount = 20
+	p.lifetime = 0.55
+	p.direction = Vector3.UP
+	p.spread = 22.0
+	p.initial_velocity_min = 1.3
+	p.initial_velocity_max = 2.8
+	p.gravity = Vector3(0, 1.6, 0)        # embers rise
+	p.scale_amount_min = 0.4
+	p.scale_amount_max = 1.0
+	p.position = Vector3(0, ZOMBIE_HEIGHT * 0.5 * _size, 0)
+	p.emitting = true
+	add_child(p)
+	_fire = p
+
+## Drop a little rotten flesh the player can grab (combat reward — not when it burns at dawn).
+func _drop_loot() -> void:
+	if world == null:
+		return
+	var n := 2 if brute else (0 if _rng.randf() > 0.7 else 1)
+	for i in range(n):
+		var drop := preload("res://scripts/world/block_drop.gd").new()
+		drop.setup(VoxelTypes.ROTTEN_FLESH, world, player)
+		world.add_child(drop)
+		drop.global_position = global_position + Vector3(_rng.randf_range(-0.3, 0.3), 0.6, _rng.randf_range(-0.3, 0.3))
+
+## A shove from a player hit (direction = away from the player). Brutes barely budge.
+func apply_knockback(dir: Vector3, force: float) -> void:
+	if _dying:
+		return
+	var f := force * (0.2 if brute else 1.0)
+	_knockback = Vector3(dir.x, 0.0, dir.z).normalized() * f
+
 func take_damage(amount: int) -> void:
+	if _dying:
+		return                                  # already toppling — ignore further hits
 	if _snd_hurt and _snd_hurt.stream:
+		_snd_hurt.pitch_scale = _voice_pitch * _rng.randf_range(0.95, 1.05)
 		_snd_hurt.play()
 	flash()
 	health -= amount
 	if health <= 0:
-		if player and is_instance_valid(player) and player.has_signal("mob_killed"):
-			player.emit_signal("mob_killed")
+		_die()
+
+## Death: stop the AI, drop the collider so the corpse doesn't block, and topple the body
+## over (rotate down + sink + shrink) before despawning — a beat of feedback for the kill.
+func _die() -> void:
+	_dying = true
+	velocity = Vector3.ZERO
+	if _anim_player:
+		_anim_player.stop()           # freeze the clip so the corpse doesn't walk while toppling
+	if _fire and is_instance_valid(_fire):
+		_fire.emitting = false        # stop spewing embers as it topples
+	if not _burning:
+		_drop_loot()                  # combat kills reward flesh; dawn-burned corpses don't litter
+	_death_burst()
+	if player and is_instance_valid(player) and player.has_signal("mob_killed"):
+		player.emit_signal("mob_killed")
+	if _col:
+		_col.set_deferred("disabled", true)
+	if _model and is_instance_valid(_model):
+		var tw := create_tween()
+		tw.tween_property(_model, "rotation:x", _model.rotation.x + deg_to_rad(-95.0), 0.45) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.parallel().tween_property(_model, "position:y", _model_rest_y - 0.5, 0.45) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw.parallel().tween_property(_model, "scale", _model.scale * 0.6, 0.55) \
+			.set_delay(0.1)
+		tw.tween_callback(queue_free)
+	else:
 		queue_free()
 
 func _physics_process(delta: float) -> void:
+	if _dying:
+		return                                  # frozen while the death topple tween plays
 	if _attack_cd > 0.0:
 		_attack_cd -= delta
+
+	# Daylight kills the undead: a siege mob caught under open sky once day breaks catches
+	# fire and burns down (the classic Minecraft rule). Cave lurkers have no day_night ref,
+	# so they never burn underground.
+	if day_night != null and not _burning:
+		_sun_check_t -= delta
+		if _sun_check_t <= 0.0:
+			_sun_check_t = 0.7
+			if not day_night.is_night() and _sky_exposed():
+				ignite()
+	if _burning:
+		_burn_tick(delta)
+		if _dying:
+			return                              # burned to death this frame — stop here
 
 	# Periodic menacing groan from the mob's position.
 	_groan_timer -= delta
 	if _groan_timer <= 0.0:
 		_groan_timer = _rng.randf_range(3.5, 8.0)
 		if _snd_groan and _snd_groan.stream and not _snd_groan.playing:
+			_snd_groan.pitch_scale = _voice_pitch * _rng.randf_range(0.95, 1.05)
 			_snd_groan.play()
 
 	var chasing := false
@@ -267,11 +537,16 @@ func _physics_process(delta: float) -> void:
 				_dir = flat.normalized()
 			if dist < ATTACK_RANGE and absf(to.y) < 1.6 and _attack_cd <= 0.0:
 				_attack_cd = ATTACK_CD
-				_punch = 1.0                       # play the punch-lunge animation
+				_punch = 1.0                       # procedural-rig lunge
+				_attacking = true                  # rigged-model: trigger the attack clip
 				if _snd_attack and _snd_attack.stream:
+					_snd_attack.pitch_scale = _voice_pitch * _rng.randf_range(0.95, 1.05)
 					_snd_attack.play()
 				if player.has_method("hurt"):
 					player.hurt(damage)
+					if player.has_method("push"):
+						var kb := Vector3(to.x, 0.0, to.z).normalized()   # shove the player back
+						player.push(kb * (7.0 if brute else 4.0) + Vector3.UP * 1.5)
 
 	if not chasing:
 		_timer -= delta
@@ -293,9 +568,10 @@ func _physics_process(delta: float) -> void:
 			if chasing and player and is_instance_valid(player):
 				py_above = float(player.global_position.y) - global_position.y
 			velocity.y = 6.6 if py_above > 1.2 else 4.5
-	var spd := CHASE_SPEED if chasing else SPEED
-	velocity.x = _dir.x * spd
-	velocity.z = _dir.z * spd
+	var spd := (CHASE_SPEED if chasing else SPEED) * _speed_mul   # brutes slow, runners fast
+	velocity.x = _dir.x * spd + _knockback.x
+	velocity.z = _dir.z * spd + _knockback.z
+	_knockback = _knockback.lerp(Vector3.ZERO, delta * 8.0)   # shove decays fast
 
 	if _dir.length() > 0.1:
 		look_at(global_position + Vector3(_dir.x, 0.0, _dir.z), Vector3.UP)
@@ -328,12 +604,34 @@ func _avoid_hazards() -> void:
 		_timer = _rng.randf_range(1.0, 2.0)
 
 func _animate(delta: float) -> void:
+	if _anim_player != null:
+		_anim_clips()                 # rigged GLB: real skeletal walk/attack/idle clips
+		return
 	if _model == null:
 		return
 	if _articulated:
 		_anim_articulated(delta)
 	else:
 		_anim_shamble(delta)
+
+## Drive the rigged model's clips: the attack clip plays to completion, otherwise walk while
+## moving / idle while still.
+func _anim_clips() -> void:
+	if _attacking:
+		if _anim_player.current_animation != _clip_attack:
+			if _clip_attack == "":
+				_attacking = false
+			else:
+				_anim_player.play(_clip_attack)
+				return
+		elif _anim_player.is_playing():
+			return                    # let the grab finish before resuming locomotion
+		else:
+			_attacking = false
+	var horiz := Vector2(velocity.x, velocity.z).length()
+	var want := _clip_walk if horiz > 0.2 else _clip_idle
+	if want != "" and _anim_player.current_animation != want:
+		_anim_player.play(want, 0.15)
 
 ## GLB models: a heavy whole-body shamble — bob + sway + forward-hunch lurch, snapping into a
 ## forward lunge when it punches the player. (Single static mesh, so the body moves as a whole.)
@@ -356,33 +654,39 @@ func _anim_shamble(delta: float) -> void:
 		_model.rotation.z = lerpf(_model.rotation.z, 0.0, delta * 8.0)
 		_model.rotation.x = lerpf(_model.rotation.x, HUNCH, delta * 8.0)
 
-## Blocky-rig fallback: legs stride, arms swing/counter-swing, body bobs; arms jab on a hit.
+## The jointed rig animation: legs stride while walking, arms held out front and waving (the
+## classic "reaching for you" pose, animated even when standing still), body hunched and bobbing,
+## and both arms thrust forward in a grabbing lunge when it attacks.
 func _anim_articulated(delta: float) -> void:
+	# Attack: lunge the body forward and thrust both arms out to grab.
 	if _punch > 0.0:
-		_punch = maxf(0.0, _punch - delta * 3.5)
-		var arc := sin((1.0 - _punch) * PI)
+		_punch = maxf(0.0, _punch - delta * 3.5)        # ~0.3s grab
+		var arc := sin((1.0 - _punch) * PI)             # 0 -> 1 -> 0
+		_model.rotation.x = RIG_HUNCH - 0.5 * arc       # body lunges forward from the hunch
 		_model.position.y = _model_rest_y - 0.05 * arc
-		_model.rotation.x = -0.35 * arc
-		var jab := ARM_REST - 1.05 * arc
-		_arm_l.rotation.x = jab
-		_arm_r.rotation.x = jab
+		var thrust := ARM_REST - 0.5 * arc              # arms snap forward to grab
+		_arm_l.rotation.x = thrust
+		_arm_r.rotation.x = thrust
+		_arm_l.rotation.z = 0.0
+		_arm_r.rotation.z = 0.0
 		return
-	_model.rotation.x = lerpf(_model.rotation.x, 0.0, delta * 8.0)
+	_model.rotation.x = lerpf(_model.rotation.x, RIG_HUNCH, delta * 8.0)   # ease back to the hunch
 	var horiz := Vector2(velocity.x, velocity.z).length()
+	# Phase runs fast while walking, slow while standing — so the arms keep waving either way.
+	_walk_phase += delta * ((4.0 + horiz * 1.2) if horiz > 0.2 else 1.8)
+	var wave := sin(_walk_phase)
 	if horiz > 0.2:
-		_walk_phase += delta * (4.0 + horiz * 1.2)
-		var swing := sin(_walk_phase)
-		_leg_l.rotation.x = swing * 0.7
-		_leg_r.rotation.x = -swing * 0.7
-		_arm_l.rotation.x = ARM_REST - swing * 0.25
-		_arm_r.rotation.x = ARM_REST + swing * 0.25
-		_model.position.y = _model_rest_y + absf(sin(_walk_phase)) * 0.05
-		_model.rotation.z = sin(_walk_phase) * 0.05
+		_leg_l.rotation.x = wave * 0.8                  # legs stride
+		_leg_r.rotation.x = -wave * 0.8
+		_model.position.y = _model_rest_y + absf(wave) * 0.06   # body bob
+		_model.rotation.z = wave * 0.06                 # weight shift side to side
 	else:
 		_leg_l.rotation.x = lerpf(_leg_l.rotation.x, 0.0, delta * 8.0)
 		_leg_r.rotation.x = lerpf(_leg_r.rotation.x, 0.0, delta * 8.0)
-		_arm_l.rotation.x = lerpf(_arm_l.rotation.x, ARM_REST, delta * 8.0)
-		_arm_r.rotation.x = lerpf(_arm_r.rotation.x, ARM_REST, delta * 8.0)
-		_walk_phase += delta * 1.5
-		_model.position.y = _model_rest_y + sin(_walk_phase) * 0.012
-		_model.rotation.z = lerpf(_model.rotation.z, 0.0, delta * 8.0)
+		_model.position.y = lerpf(_model.position.y, _model_rest_y, delta * 6.0)
+		_model.rotation.z = lerpf(_model.rotation.z, 0.0, delta * 6.0)
+	# Arms always reach out front, bobbing up/down (opposite) and splayed/swaying side to side.
+	_arm_l.rotation.x = ARM_REST + wave * 0.20
+	_arm_r.rotation.x = ARM_REST - wave * 0.20
+	_arm_l.rotation.z = 0.14 + sin(_walk_phase * 0.6) * 0.10
+	_arm_r.rotation.z = -0.14 - sin(_walk_phase * 0.6) * 0.10

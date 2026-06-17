@@ -17,6 +17,35 @@ var _vy := 0.0
 var _age := 0.0
 var _mesh: MeshInstance3D
 
+# Every drop is the same 0.3 cube, and a given block id always looks the same — so the mesh
+# is shared by all drops and the per-id material is built once and cached. Mining a vein used
+# to allocate a fresh BoxMesh + StandardMaterial3D per dropped cube; now it allocates nothing.
+static var _shared_mesh: BoxMesh
+static var _mat_cache: Dictionary = {}   # block_id -> StandardMaterial3D
+
+static func _drop_mesh() -> BoxMesh:
+	if _shared_mesh == null:
+		_shared_mesh = BoxMesh.new()
+		_shared_mesh.size = Vector3(0.3, 0.3, 0.3)
+	return _shared_mesh
+
+static func _drop_material(id: int) -> StandardMaterial3D:
+	if _mat_cache.has(id):
+		return _mat_cache[id]
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = VoxelTypes.color_of(id)
+	mat.roughness = 0.9
+	# Blocks show their real atlas texture on the little cube; items keep the flat colour
+	# (their icons are transparent cut-outs that wouldn't read on a solid cube).
+	if id <= VoxelTypes.MAX_BLOCK:
+		var tex: Texture2D = ItemIcons.tile_texture(id)   # a single cropped tile, not the whole atlas
+		if tex != null:
+			mat.albedo_texture = tex
+			mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+			mat.albedo_color = Color.WHITE
+	_mat_cache[id] = mat
+	return mat
+
 func setup(id: int, mgr, plr) -> void:
 	block_id = id
 	manager = mgr
@@ -24,21 +53,8 @@ func setup(id: int, mgr, plr) -> void:
 
 func _ready() -> void:
 	_mesh = MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = Vector3(0.3, 0.3, 0.3)
-	_mesh.mesh = bm
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = VoxelTypes.color_of(block_id)
-	mat.roughness = 0.9
-	# Blocks show their real atlas texture on the little cube; items keep the flat colour
-	# (their icons are transparent cut-outs that wouldn't read on a solid cube).
-	if block_id <= VoxelTypes.MAX_BLOCK:
-		var tex: Texture2D = ItemIcons.tile_texture(block_id)   # a single cropped tile, not the whole atlas
-		if tex != null:
-			mat.albedo_texture = tex
-			mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-			mat.albedo_color = Color.WHITE
-	_mesh.material_override = mat
+	_mesh.mesh = _drop_mesh()
+	_mesh.material_override = _drop_material(block_id)
 	add_child(_mesh)
 
 func _physics_process(delta: float) -> void:

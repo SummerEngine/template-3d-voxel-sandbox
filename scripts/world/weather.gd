@@ -68,9 +68,9 @@ var _season_rect: ColorRect
 var _weather_rect: ColorRect
 var _flash_rect: ColorRect
 var _label: Label
-var _rain: CPUParticles3D
-var _snow: CPUParticles3D
-var _sand: CPUParticles3D
+var _rain: GPUParticles3D
+var _snow: GPUParticles3D
+var _sand: GPUParticles3D
 var _thunder_t := 0.0
 
 # audio (one looping bed, fade-swapped on change; plus thunder/siren one-shots)
@@ -168,21 +168,29 @@ func _build_particles() -> void:
 		p.emitting = false
 		add_child(p)
 
+## Weather precipitation runs on GPUParticles3D: the game is CPU-bound with GPU headroom, so
+## simulating these hundreds of particles on the GPU (not the main thread) is free performance.
+## local_coords = true preserves the original look: the field stays centred on the player (the
+## node is re-positioned each frame in _update_particles). CPUParticles3D defaulted this to
+## true; GPUParticles3D defaults it to false, so we must set it explicitly to avoid a change.
 func _make_particles(count: int, life: float, dir: Vector3, spread: float,
-		vmin: float, vmax: float, grav: Vector3, msize: Vector3, col: Color) -> CPUParticles3D:
-	var p := CPUParticles3D.new()
+		vmin: float, vmax: float, grav: Vector3, msize: Vector3, col: Color) -> GPUParticles3D:
+	var p := GPUParticles3D.new()
 	p.amount = count
 	p.lifetime = life
-	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
-	p.emission_box_extents = Vector3(17, 1.0, 17)
-	p.direction = dir
-	p.spread = spread
-	p.initial_velocity_min = vmin
-	p.initial_velocity_max = vmax
-	p.gravity = grav
+	p.local_coords = true
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(17, 1.0, 17)
+	pm.direction = dir
+	pm.spread = spread
+	pm.initial_velocity_min = vmin
+	pm.initial_velocity_max = vmax
+	pm.gravity = grav
+	p.process_material = pm
 	var bm := BoxMesh.new()
 	bm.size = msize
-	p.mesh = bm
+	p.draw_pass_1 = bm
 	p.material_override = _unshaded(col)
 	return p
 
@@ -388,7 +396,7 @@ func _update_particles() -> void:
 	_snow.emitting = open and weather == Weather.SNOW
 	_sand.emitting = open and weather == Weather.SANDSTORM
 	if _sand.emitting:
-		_sand.direction = Vector3(1, 0.05, 0.3).normalized()
+		(_sand.process_material as ParticleProcessMaterial).direction = Vector3(1, 0.05, 0.3).normalized()
 
 ## True when there are solid blocks just above the player's head (cave / building roof),
 ## so precipitation and its screen tint are suppressed indoors.

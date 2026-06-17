@@ -4,11 +4,19 @@ extends Node3D
 ## player, HUD, hotbar/crafting UI and pause menu, loads a saved world when asked,
 ## and spawns passive animals (always) and hostile mobs (at night). Low-end tuned.
 
+const InputActions := preload("res://scripts/core/input_actions.gd")
 const ANIMAL_COUNT := 6
 const NIGHT_MOB_COUNT := 3     # a real first-night threat; +2 per night survived up to the cap
 const MAX_NIGHT_MOBS := 16
+const BLOOD_MOON_EVERY := 5    # every Nth night is a red-sky siege peak (more mobs + brutes)
+const CAVE_MOB_MAX := 4        # lurkers maintained around a player who is deep underground
+const CAVE_DEPTH := 5.0        # blocks below the surface before caves spawn hostiles
+const SIEGE_SPAWN_PER_FRAME := 2   # stagger the horde spawn so nightfall doesn't hitch
 
 var _nights := 0          # nights survived — drives escalating siege difficulty
+var _spawn_queue: Array = []   # pending siege spawns, drained a few per frame
+var _cave_mobs: Array = []
+var _cave_t := 0.0
 
 var world: ChunkManager
 var player
@@ -25,7 +33,10 @@ var _rng := RandomNumberGenerator.new()
 func _ready() -> void:
 	Engine.max_fps = 60
 	_rng.randomize()
+	InputActions.setup()   # register remappable movement actions (saved binds applied here)
+	# Zombies are now a lightweight code-built rig (no 20 MB skinned GLB to warm-load).
 	add_child(preload("res://scripts/core/audio_ducker.gd").new())   # creates audio buses
+	GameSettings.apply_audio(get_tree())                              # saved volume levels
 	var win := get_window()
 	if win:
 		win.content_scale_mode = Window.CONTENT_SCALE_MODE_DISABLED
@@ -139,6 +150,8 @@ func _ready() -> void:
 			day_night.time_of_day = float(save.time)
 		if save.has("weather") and save.weather is Dictionary and not save.weather.is_empty():
 			weather.load_state(save.weather)
+
+	GameSettings.apply_gameplay(player, world)   # saved sensitivity + view distance
 
 ## Spiral out from the origin for a dry, above-sea column with no tree (or tree
 ## canopy) over it, so the player never spawns trapped inside leaves.
@@ -258,13 +271,27 @@ func _spawn_animals() -> void:
 		a.position = Vector3(float(ax), float(ah), float(az))
 		add_child(a)
 
+## A "blood moon" every 5th night: a bigger horde with brutes, under a red sky — the siege
+## peak the day's prep builds toward. Other nights still escalate via _nights.
 func _on_phase_changed(is_night: bool) -> void:
 	if is_night:
-		# Each night survived raises the count and the mobs' health/damage.
+		var night_no := _nights + 1
+		var blood := night_no % BLOOD_MOON_EVERY == 0
+		if day_night:
+			day_night.blood_moon = blood
 		var count: int = mini(MAX_NIGHT_MOBS, NIGHT_MOB_COUNT + _nights * 2)
-		_spawn_hostiles(count)
+		if blood:
+			count = mini(MAX_NIGHT_MOBS + 6, count + 5)   # they come in force
+		_spawn_hostiles(count, blood)
+		if player and player.hud and player.hud.has_method("show_toast"):
+			if blood:
+				player.hud.show_toast("BLOOD MOON  -  Night %d. They come in force." % night_no, Color(1.0, 0.3, 0.25))
+			else:
+				player.hud.show_toast("Night %d  -  the horde rises." % night_no, Color(0.92, 0.86, 0.6))
 	else:
-		_clear_hostiles()
+		_ignite_hostiles()      # dawn: the horde catches fire and burns down rather than blinking out
+		if day_night:
+			day_night.blood_moon = false
 		_nights += 1
 		if player:
 			if player.has_signal("night_survived"):
@@ -272,29 +299,121 @@ func _on_phase_changed(is_night: bool) -> void:
 			if player.hud and player.hud.has_method("show_toast"):
 				player.hud.show_toast("Night %d survived" % _nights, Color(0.7, 1.0, 0.8))
 
-func _spawn_hostiles(n: int) -> void:
+## QUEUE the horde rather than instantiating it all at once — instantiating 16 skinned zombies
+## in a single frame hitched nightfall hard. _process drains the queue a few per frame.
+func _spawn_hostiles(n: int, blood := false) -> void:
 	_clear_hostiles()
 	if player == null:
 		return
 	var bonus_hp := mini(_nights * 4, 28)                  # cap so late mobs aren't damage sponges
 	var bonus_dmg := mini(floori(float(_nights) / 2.0), 4) # ramps faster; base damage is now 2
 	for i in range(n):
-		var ang := _rng.randf_range(0.0, TAU)
-		var rad := _rng.randf_range(12.0, 20.0)
-		var mx: float = player.global_position.x + cos(ang) * rad
-		var mz: float = player.global_position.z + sin(ang) * rad
-		var my: int = world.surface_height(int(mx), int(mz)) + 2
-		var mob := preload("res://scripts/entities/hostile_mob.gd").new()
-		mob.player = player
-		mob.world = world
-		mob.health = 10 + bonus_hp
-		mob.damage = 2 + bonus_dmg
-		mob.position = Vector3(mx, float(my), mz)
-		add_child(mob)
-		_hostiles.append(mob)
+		# Brutes anchor the horde: several on blood moons, one on tougher regular nights.
+		var is_brute: bool = (blood and i % 4 == 0) or (not blood and _nights >= 4 and i == 0)
+		# Some of the rest run — lean, fast, frail. Keeps the horde varied and the chase tense.
+		var is_runner: bool = (not is_brute) and _nights >= 1 and _rng.randf() < 0.35
+		_spawn_queue.append({
+			"brute": is_brute,
+			"runner": is_runner,
+			"hp": (10 + bonus_hp) * (3 if is_brute else 1) - (4 if is_runner else 0),  # runners are frail
+			"dmg": (2 + bonus_dmg) + (3 if is_brute else 0),
+		})
+
+## Instantiate one queued siege mob around the player's CURRENT position (so a staggered spawn
+## still surrounds them even if they've moved).
+func _spawn_one_hostile(spec: Dictionary) -> void:
+	var ang := _rng.randf_range(0.0, TAU)
+	var rad := _rng.randf_range(12.0, 20.0)
+	var mx: float = player.global_position.x + cos(ang) * rad
+	var mz: float = player.global_position.z + sin(ang) * rad
+	var my: int = world.surface_height(int(mx), int(mz)) + 2
+	var mob := preload("res://scripts/entities/hostile_mob.gd").new()
+	mob.player = player
+	mob.world = world
+	mob.brute = bool(spec.brute)
+	mob.runner = bool(spec.get("runner", false))
+	mob.day_night = day_night          # so it burns if it's still out under open sky at dawn
+	mob.health = int(spec.hp)
+	mob.damage = int(spec.dmg)
+	mob.position = Vector3(mx, float(my), mz)
+	add_child(mob)
+	_hostiles.append(mob)
 
 func _clear_hostiles() -> void:
+	_spawn_queue.clear()                  # cancel any pending spawns (e.g. at dawn)
 	for m in _hostiles:
 		if is_instance_valid(m):
 			m.queue_free()
 	_hostiles.clear()
+
+## Dawn: set the surviving horde alight instead of deleting it — they smoke, sear, and topple
+## over a couple of seconds (self-freeing on death). Cancels any pending spawns first.
+func _ignite_hostiles() -> void:
+	_spawn_queue.clear()
+	for m in _hostiles:
+		if is_instance_valid(m) and m.has_method("ignite"):
+			m.ignite()
+	_hostiles.clear()                     # they self-manage from here (burn → topple → queue_free)
+
+## Caves are dangerous now: while the player is well below the surface, keep a few lurking
+## hostiles nearby. They emerge from the dark and are culled once the player climbs out or
+## moves away — so descending for ore is a real risk, not a free vending machine.
+func _process(delta: float) -> void:
+	if player == null or world == null:
+		return
+	# Drain the staggered siege spawn a few per frame (only while it's still night).
+	if not _spawn_queue.is_empty() and day_night != null and day_night.is_night():
+		var sk := 0
+		while sk < SIEGE_SPAWN_PER_FRAME and not _spawn_queue.is_empty():
+			_spawn_one_hostile(_spawn_queue.pop_front())
+			sk += 1
+	# Cheap per-frame prune: drop freed or far-away cave lurkers.
+	for i in range(_cave_mobs.size() - 1, -1, -1):
+		var m = _cave_mobs[i]
+		if not is_instance_valid(m):
+			_cave_mobs.remove_at(i)
+		elif m.global_position.distance_to(player.global_position) > 30.0:
+			m.queue_free()
+			_cave_mobs.remove_at(i)
+	_cave_t -= delta
+	if _cave_t > 0.0:
+		return                                  # the rest (terrain queries) only runs every 3.5 s
+	_cave_t = 3.5
+	# A cave lurker that has climbed out into the open despawns — no daylight cave zombies.
+	for i in range(_cave_mobs.size() - 1, -1, -1):
+		var m = _cave_mobs[i]
+		if is_instance_valid(m):
+			var ms: int = world.surface_height(int(m.global_position.x), int(m.global_position.z))
+			if m.global_position.y >= float(ms) - 1.5:
+				m.queue_free()
+				_cave_mobs.remove_at(i)
+	# Spawn only while genuinely underground, and never on top of an active night siege.
+	var siege: bool = day_night != null and day_night.is_night() and not _hostiles.is_empty()
+	var px := int(player.global_position.x)
+	var pz := int(player.global_position.z)
+	var underground: bool = player.global_position.y < float(world.surface_height(px, pz)) - CAVE_DEPTH
+	if underground and not siege and _cave_mobs.size() < CAVE_MOB_MAX:
+		_spawn_cave_mob()
+
+func _spawn_cave_mob() -> void:
+	var cy := int(player.global_position.y)
+	for _try in range(10):
+		var ox := _rng.randi_range(-11, 11)
+		var oz := _rng.randi_range(-11, 11)
+		if absi(ox) < 4 and absi(oz) < 4:
+			continue                                   # never right on top of the player
+		var cx := int(player.global_position.x) + ox
+		var cz := int(player.global_position.z) + oz
+		# A standable air pocket in the dark: head + body clear, solid floor under it.
+		if world.get_block(cx, cy, cz) == VoxelTypes.AIR \
+				and world.get_block(cx, cy + 1, cz) == VoxelTypes.AIR \
+				and VoxelTypes.is_solid(world.get_block(cx, cy - 1, cz)):
+			var mob := preload("res://scripts/entities/hostile_mob.gd").new()
+			mob.player = player
+			mob.world = world
+			mob.health = 8 + mini(_nights * 2, 16)
+			mob.damage = 2 + mini(floori(float(_nights) / 2.0), 3)
+			mob.position = Vector3(float(cx) + 0.5, float(cy), float(cz) + 0.5)
+			add_child(mob)
+			_cave_mobs.append(mob)
+			return

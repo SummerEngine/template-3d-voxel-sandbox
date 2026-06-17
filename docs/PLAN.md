@@ -1,104 +1,59 @@
-# Voxel Sandbox Template — Project Plan
+# Voxel Sandbox — Project Plan
 
-Phased plan to take the template from "runnable prototype" to "polished, documented
-foundation other developers build on." Each phase lists **tasks** and **done-when** criteria.
-Tick items as they land. See `DESIGN.md` for the design rationale behind each system.
-
----
-
-## Phase 0 — Foundation & Pipeline ✅ (current)
-Prove the repo, structure, docs, and deploy pipeline before building features.
-
-- [x] GDScript-only project (removed `[dotnet]` config)
-- [x] Project folder structure (`assets/`, `scripts/`, `scenes/`, `docs/`)
-- [x] Design documentation (`docs/DESIGN.md`)
-- [x] This project plan (`docs/PLAN.md`)
-- [x] Template `README.md` + asset conventions (`assets/README.md`)
-- [ ] **Commit + push `main` and `developer` to GitHub** (needs GitHub auth — see "Deploy" below)
-
-**Done when:** both branches exist on the team's GitHub remote and a teammate can clone.
+Status of the game and the forward roadmap. This file used to describe a node-per-block
+prototype; the project has long since grown into a full voxel survival-sandbox. This reflects
+what's actually in the code today (2026-06) and what's worth doing next. See `DESIGN.md` for
+how the systems are built.
 
 ---
 
-## Phase 1 — Movement Controller
-Production-quality first-person controller (replaces the prototype `player.gd`).
+## Built (shipped in the codebase)
 
-- [ ] Move controller into `scripts/player/player_controller.gd` + `scenes/player.tscn`
-- [ ] Walk/run (sprint), mouse look (clamped), jump with gravity
-- [ ] Creative fly toggle (up/down), clean ground/air state
-- [ ] Coyote time + jump buffering for good feel
-- [ ] Input map bindings (not hardcoded keycodes) via `summer_input_map_bind`
-
-**Done when:** you can walk, sprint, jump, and fly smoothly; bindings are remappable.
-
----
-
-## Phase 2 — Voxel World System
-Data-driven, scalable world (evolves the prototype `voxel_world.gd`).
-
-- [ ] `scripts/core/block_registry.gd` — block types (id, name, material/texture, flags)
-- [ ] `scripts/world/voxel_world.gd` — chunk-based storage + meshing (replace node-per-block)
-- [ ] Procedural terrain generation hook (flat → heightmap noise)
-- [ ] Efficient collision (per-chunk collision shapes)
-
-**Done when:** a multi-chunk world generates and runs at smooth framerate.
+- **World:** threaded chunk streaming (`ChunkManager` + `Chunk`), greedy meshing, per-chunk
+  voxel cache, shared chunk materials, layered-noise terrain with biomes (meadow / forest /
+  jungle / desert / snow / mountain / water), caves, ores, rivers & oases.
+- **Blocks/items:** 29 blocks + 8 items in one registry (`VoxelTypes`), 8×8 texture atlas,
+  per-face tiles, drops, 27-slot inventory + hotbar, crafting table / furnace / chests.
+- **Player:** first-person controller (walk/run/jump/fly/swim), auto-step, mining with tier
+  gates, place validation, camera feel (FOV/bob/shake), first-person viewmodel + animations.
+- **Progression:** tiered tools/weapons, smelting, armor, advancements (J), escalating night
+  sieges, hunger (lethal), day/night cycle.
+- **Enemies & fauna:** night zombies (chase/attack/leap, death topple) + 16 biome creatures
+  with procedural/clip locomotion.
+- **Weather/seasons:** continuous climate → clear/cloudy/rain/snow, desert sandstorm, coast
+  tsunami, GPU precipitation, audio beds.
+- **Polish:** fog, water shader, crack overlay, particles (GPU weather/ambient, pooled
+  bursts), pooled SFX voices, underwater muffle, music + ambient, minimap, death screen.
+- **Meta:** save/load, main menu, pause menu, **settings (volume / look-speed / view
+  distance, persisted)**.
 
 ---
 
-## Phase 3 — Interaction & Inventory
-- [ ] Raycast place/break wired to the block registry
-- [ ] Hotbar UI (`scripts/ui/`) showing selectable block types
-- [ ] Block selection (number keys + scroll)
-- [ ] Place validation (don't place inside the player)
+## Roadmap (next, roughly in priority order)
 
-**Done when:** you can build/break with multiple block types via the hotbar.
+### A. Verify & document (do first)
+- [ ] **Run the game and verify** the recent optimization/SFX/VFX/animation/settings passes
+      (the engine has been offline; none are runtime-checked yet).
+- [x] Bring `DESIGN.md` / `PLAN.md` in line with the real game.
 
----
+### B. Fixes
+- [ ] **Remappable controls** — input is currently hardcoded (`KEY_*` in `player.gd`).
+      Migrate to InputMap actions, add a rebind UI to the settings panel.
+- [ ] **Farming loop** — `FARMLAND` (and a hoe model) exist but there are no seeds/crops/
+      growth. Either wire a real till→plant→grow→harvest loop or remove the stub block.
+- [ ] **Animal SFX** — `fauna.gd` creatures are silent; add per-species idle/hurt sounds.
+- [ ] **Player third-person model height** — `MODEL_SCALE = 1.0` (not AABB-fit); verify the
+      body matches the 1.8 m capsule when seen in third person.
 
-## Phase 4 — Assets & Texturing
-- [ ] Block texture atlas in `assets/textures/` (via Summer MCP `summer_generate_image` or manual)
-- [ ] Materials in `assets/materials/` referenced by the block registry
-- [ ] Replace flat colors with textured blocks
-- [ ] Optional: ambient SFX (place/break/step) in `assets/audio/`
-
-**Done when:** blocks are textured and the registry maps types → atlas regions.
-
----
-
-## Phase 5 — Game Feel & Polish
-- [ ] Block place/break feedback (particles, sound, subtle screen feedback)
-- [ ] Sky/lighting pass (time-of-day optional)
-- [ ] Performance pass (`summer_get_diagnostics`) — target stable 60 FPS
-
-**Done when:** interactions feel responsive and the scene is visually clean.
+### C. Gameplay additions (each wants new assets + runtime iteration)
+- [ ] **Combat variety** — a ranged enemy (skeleton) + a player bow/arrow projectile.
+- [ ] **Placeable light** — torches (block + light) so caves/bases aren't lit only by the
+      player's follow-lamp.
+- [ ] **Structures** — villages / ruins / dungeons with loot, keyed to the biome system.
+- [ ] **Beds & sleep** — skip/secure the night and set spawn.
 
 ---
 
-## Phase 6 — Template Packaging
-Make it genuinely reusable by others.
-
-- [ ] End-user README: how to clone, open, play, and extend
-- [ ] Inline "EXTEND HERE" comments at each extension point
-- [ ] Example: add a custom block type, documented step-by-step
-- [ ] Tag a `v1.0` template release
-
-**Done when:** a new developer can clone, read the README, and ship a change in <30 min.
-
----
-
-## Deploy (gates Phase 0 completion)
-
-The remote currently points at Summer's **read-only template**, and GitHub auth isn't set up
-yet. To deploy for the team:
-
-1. Authenticate GitHub CLI (token method is simplest):
-   - Create a token at https://github.com/settings/tokens (scope: `repo`)
-   - `gh auth login --with-token`  → paste token → Enter
-2. Create the team repo and push both branches:
-   ```
-   gh repo create <org-or-user>/template-3d-voxel-sandbox --private --source . --remote origin --push
-   git push -u origin developer
-   ```
-
-**Branching model:** `main` = stable/reviewed; `developer` = integration branch teammates
-branch off of. Feature work → PR into `developer` → periodic PR `developer → main`.
+## Branching & deploy
+`main` = stable/reviewed; `developer` = integration branch. Feature work → PR into
+`developer` → periodic PR `developer → main`. Origin is the team GitHub remote.

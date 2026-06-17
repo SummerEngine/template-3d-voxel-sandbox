@@ -20,9 +20,11 @@ signal night_survived
 const WALK_SPEED := 5.0
 const SPRINT_SPEED := 8.0
 const FLY_SPEED := 10.0
+const InputActions := preload("res://scripts/core/input_actions.gd")
 const JUMP_VELOCITY := 5.0
 const SWIM_UP_SPEED := 4.0
-const MOUSE_SENS := 0.0025
+const MOUSE_SENS := 0.0025          # base look sensitivity; mouse_sens scales this via settings
+var mouse_sens := MOUSE_SENS
 const REACH := 6.0
 const FALL_DAMAGE_SPEED := 16.0
 const VOID_Y := -40.0
@@ -81,6 +83,7 @@ var _place_cd := 0.0
 var _last_space_ms := 0
 var _step_timer := 0.0
 var _bob_phase := 0.0
+var _land_squash := 0.0       # 1->0 camera dip on landing, scaled by fall speed
 var _rmb_down := false
 var _dead := false
 var _death_prev_fp := true       # view to restore after the death cam
@@ -119,7 +122,20 @@ var selected := 0
 var _mine_cell := Vector3i(2147483647, 0, 0)
 var _mine_progress := 0.0
 
-# sounds
+# sounds — the snd_* players are config holders (stream + volume); actual playback goes
+# through a small pool of voices so rapid one-shots layer instead of cutting each other off.
+const _SFX_VOICES := 10
+var _voices: Array[AudioStreamPlayer] = []
+var _voice_i := 0
+var _was_submerged := false        # head-underwater state, drives the muffle effect
+var _was_in_water := false         # feet-in-water state, drives the entry splash
+# Pooled one-shot burst emitters (block-break crumbs, land-dust) — reused instead of
+# allocating a fresh CPUParticles3D + mesh + material on every mine/landing.
+const _VFX_POOL := 12
+var _vfx_pool: Array[CPUParticles3D] = []
+var _vfx_i := 0
+static var _vfx_mesh: BoxMesh
+static var _vfx_mat: StandardMaterial3D
 var snd_break_soft: AudioStreamPlayer
 var snd_break_hard: AudioStreamPlayer
 var snd_break_dirt: AudioStreamPlayer
@@ -138,6 +154,7 @@ var snd_pickup: AudioStreamPlayer
 var snd_monster: AudioStreamPlayer
 
 func _ready() -> void:
+	InputActions.setup()   # ensure movement actions exist (idempotent; main.gd also calls it)
 	inventory = Inventory.new()
 	_give_starter_kit()
 
@@ -171,6 +188,7 @@ func _ready() -> void:
 
 	_setup_model()
 	_setup_audio()
+	_setup_vfx()
 	_setup_highlight()
 	_setup_light()
 	_setup_ambient_motes()   # drifting dust motes in the air for atmosphere
@@ -188,23 +206,27 @@ func _ready() -> void:
 ## (local_coords off) so you move THROUGH them; the emitter follows the player so the air
 ## always has a little life. Unshaded + softly emissive so they catch the eye day or night.
 func _setup_ambient_motes() -> void:
-	var p := CPUParticles3D.new()
+	# Always-on ambient dust. Runs on GPUParticles3D so its 60 particles simulate on the GPU
+	# (which has headroom) instead of costing main-thread time every frame for the whole game.
+	var p := GPUParticles3D.new()
 	p.local_coords = false
 	p.amount = 60
 	p.lifetime = 9.0
 	p.preprocess = 5.0                                   # start with the air already full
 	p.position = Vector3(0, 2.0, 0)
-	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
-	p.emission_box_extents = Vector3(15, 7, 15)
-	p.direction = Vector3(0, 1, 0)
-	p.spread = 180.0
-	p.gravity = Vector3(0, 0.02, 0)                      # almost weightless, faint upward drift
-	p.initial_velocity_min = 0.05
-	p.initial_velocity_max = 0.22
-	p.damping_min = 0.05
-	p.damping_max = 0.15
-	p.scale_amount_min = 0.02
-	p.scale_amount_max = 0.045
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(15, 7, 15)
+	pm.direction = Vector3(0, 1, 0)
+	pm.spread = 180.0
+	pm.gravity = Vector3(0, 0.02, 0)                     # almost weightless, faint upward drift
+	pm.initial_velocity_min = 0.05
+	pm.initial_velocity_max = 0.22
+	pm.damping_min = 0.05
+	pm.damping_max = 0.15
+	pm.scale_min = 0.02                                  # CPUParticles3D.scale_amount_* -> scale_min/max here
+	pm.scale_max = 0.045
+	p.process_material = pm
 	var m := SphereMesh.new()
 	m.radius = 0.5
 	m.height = 1.0
@@ -218,7 +240,7 @@ func _setup_ambient_motes() -> void:
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.material = mat
-	p.mesh = m
+	p.draw_pass_1 = m
 	p.emitting = true
 	add_child(p)
 
@@ -230,6 +252,7 @@ func _give_starter_kit() -> void:
 	inventory.add(VoxelTypes.PLANKS, 16)
 	inventory.add(VoxelTypes.GLASS, 16)
 	inventory.add(VoxelTypes.WOOD, 8)
+	inventory.add(VoxelTypes.TORCH, 16)   # light for the now-dark caves/nights
 
 var body_meshes: Array = []   # the player's body meshes (hidden in first person)
 var _viewmodel: Node3D        # held tool shown in front of the camera in first person
@@ -237,6 +260,7 @@ const VM_REST_POS := Vector3(0.3, -0.32, -0.62)   # viewmodel resting offset fro
 const VM_REST_ROT := Vector3(8, 90, -45)          # yaw faces the pick head toward the crosshair; -45 roll counters the baked tilt
 var _vm_phase := 0.0          # bob/sway phase
 var _vm_swing := 0.0          # 1->0 swing progress when mining/attacking
+var _vm_place := 0.0          # 1->0 forward "push" when placing a block
 
 func _setup_model() -> void:
 	if not ResourceLoader.exists(MODEL_PATH):
@@ -330,6 +354,15 @@ func _setup_audio() -> void:
 	snd_pickup     = _make_snd("res://assets/audio/sfx/items/pickup.mp3",      -6.0)
 	snd_monster    = _make_snd("res://assets/audio/sfx/mobs/monster_hurt.mp3", -5.0)
 
+	# Pooled playback voices: one-shots (mining swings, footsteps, a burst of pickups) play on
+	# a free voice so they overlap naturally instead of restarting the one shared player.
+	for _i in range(_SFX_VOICES):
+		var v := AudioStreamPlayer.new()
+		if AudioServer.get_bus_index("SFX") != -1:
+			v.bus = "SFX"
+		add_child(v)
+		_voices.append(v)
+
 func _make_snd(path: String, vol_db: float) -> AudioStreamPlayer:
 	var p := AudioStreamPlayer.new()
 	if ResourceLoader.exists(path):
@@ -343,11 +376,97 @@ func _make_snd(path: String, vol_db: float) -> AudioStreamPlayer:
 func _play_snd(p: AudioStreamPlayer) -> void:
 	if p == null or p.stream == null:
 		return
-	p.pitch_scale = randf_range(0.9, 1.1)
-	p.play()
+	var v := _free_voice()
+	if v == null:
+		v = p                          # pool not ready yet — fall back to the holder itself
+	v.stream = p.stream
+	v.volume_db = p.volume_db
+	v.pitch_scale = randf_range(0.9, 1.1)
+	v.play()
+
+## A pooled voice that isn't currently playing, else the next round-robin one (steals the
+## oldest). Returns null only before the pool is built (very early calls fall back to the holder).
+func _free_voice() -> AudioStreamPlayer:
+	if _voices.is_empty():
+		return null
+	for _i in range(_voices.size()):
+		var cand := _voices[_voice_i]
+		_voice_i = (_voice_i + 1) % _voices.size()
+		if not cand.playing:
+			return cand
+	var v := _voices[_voice_i]
+	_voice_i = (_voice_i + 1) % _voices.size()
+	return v
 
 func play_craft_sound() -> void:
 	_play_snd(snd_place)
+
+## Settings hook: scale look speed off the base sensitivity (1.0 = default).
+func set_sensitivity(mult: float) -> void:
+	mouse_sens = MOUSE_SENS * clampf(mult, 0.1, 4.0)
+
+# --- pooled one-shot particle bursts -------------------------------------------------
+# One BoxMesh + one material are shared by every burst; per-burst tint rides the particle
+# COLOR (vertex_color_use_as_albedo), so a burst costs zero resource allocation.
+
+static func _shared_vfx_mesh() -> BoxMesh:
+	if _vfx_mesh == null:
+		_vfx_mesh = BoxMesh.new()
+		_vfx_mesh.size = Vector3(0.11, 0.11, 0.11)
+		_vfx_mesh.material = _shared_vfx_mat()
+	return _vfx_mesh
+
+static func _shared_vfx_mat() -> StandardMaterial3D:
+	if _vfx_mat == null:
+		# Default (lit) shading, matching the original per-burst materials; the per-burst
+		# CPUParticles3D.color rides the instance COLOR via vertex_color_use_as_albedo.
+		_vfx_mat = StandardMaterial3D.new()
+		_vfx_mat.vertex_color_use_as_albedo = true
+	return _vfx_mat
+
+func _setup_vfx() -> void:
+	if world_manager == null:
+		return
+	for _i in range(_VFX_POOL):
+		var p := CPUParticles3D.new()
+		p.mesh = _shared_vfx_mesh()
+		p.one_shot = true
+		p.emitting = false
+		p.explosiveness = 0.9
+		p.direction = Vector3.UP
+		world_manager.add_child(p)
+		_vfx_pool.append(p)
+
+## Fire a reused one-shot burst at `pos`, tinted `color`. Falls back to nothing if the pool
+## isn't ready (very early calls). gravity is the downward accel magnitude (positive number).
+func _emit_burst(pos: Vector3, color: Color, amount: int, life: float, spread: float,
+		vmin: float, vmax: float, grav: float) -> void:
+	var p := _free_vfx()
+	if p == null:
+		return
+	p.amount = amount
+	p.lifetime = life
+	p.spread = spread
+	p.initial_velocity_min = vmin
+	p.initial_velocity_max = vmax
+	p.gravity = Vector3(0, -grav, 0)
+	p.color = color
+	p.global_position = pos
+	p.restart()
+	p.emitting = true
+
+## A pooled burst emitter that isn't currently emitting, else the next round-robin one.
+func _free_vfx() -> CPUParticles3D:
+	if _vfx_pool.is_empty():
+		return null
+	for _i in range(_vfx_pool.size()):
+		var cand := _vfx_pool[_vfx_i]
+		_vfx_i = (_vfx_i + 1) % _vfx_pool.size()
+		if not cand.emitting:
+			return cand
+	var p := _vfx_pool[_vfx_i]
+	_vfx_i = (_vfx_i + 1) % _vfx_pool.size()
+	return p
 
 func _setup_highlight() -> void:
 	var st := SurfaceTool.new()
@@ -471,8 +590,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_do_respawn()
 		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		yaw_pivot.rotate_y(-event.relative.x * MOUSE_SENS)
-		pitch_pivot.rotation.x = clampf(pitch_pivot.rotation.x - event.relative.y * MOUSE_SENS, PITCH_MIN, PITCH_MAX)
+		yaw_pivot.rotate_y(-event.relative.x * mouse_sens)
+		pitch_pivot.rotation.x = clampf(pitch_pivot.rotation.x - event.relative.y * mouse_sens, PITCH_MIN, PITCH_MAX)
 	elif event is InputEventMouseButton and event.pressed:
 		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -482,13 +601,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			_select(selected + 1)
 	elif event is InputEventKey and event.pressed and not event.echo:
+		if event.is_action_pressed("jump"):
+			var now := Time.get_ticks_msec()
+			if now - _last_space_ms < DOUBLE_TAP_MS:
+				flying = not flying
+				if flying: velocity = Vector3.ZERO
+			_last_space_ms = now
+			return
 		match event.keycode:
-			KEY_SPACE:
-				var now := Time.get_ticks_msec()
-				if now - _last_space_ms < DOUBLE_TAP_MS:
-					flying = not flying
-					if flying: velocity = Vector3.ZERO
-				_last_space_ms = now
 			KEY_F:
 				flying = not flying
 				if flying: velocity = Vector3.ZERO
@@ -636,6 +756,11 @@ func _animate_viewmodel(delta: float) -> void:
 		var arc := sin((1.0 - _vm_swing) * PI)        # 0 -> 1 -> 0 across the swing
 		swing_rot = Vector3(-58.0 * arc, 0.0, 0.0)    # chop the weapon down and back up
 		swing_pos = Vector3(0.0, -0.07 * arc, 0.05 * arc)
+	elif _vm_place > 0.0:
+		_vm_place = maxf(0.0, _vm_place - delta * 5.0)
+		var parc := sin((1.0 - _vm_place) * PI)       # quick jab forward + down, then back
+		swing_pos = Vector3(0.0, -0.05 * parc, -0.12 * parc)
+		swing_rot = Vector3(18.0 * parc, 0.0, 0.0)
 	_viewmodel.position = VM_REST_POS + sway + swing_pos
 	_viewmodel.rotation_degrees = swing_rot
 
@@ -658,11 +783,14 @@ func _merged_aabb(root: Node3D) -> AABB:
 	return result
 
 ## A warm glow around the player so night and caves are never pitch black.
+## A faint personal glow so you're never in pitch black — but dim and short-ranged, so caves
+## and blood-moon nights stay genuinely dark and tense. (Bright on-demand light = a future
+## torch/lantern item; this is just enough to take the next step safely.)
 func _setup_light() -> void:
 	var lamp := OmniLight3D.new()
-	lamp.light_energy = 1.4
-	lamp.omni_range = 14.0
-	lamp.light_color = Color(1.0, 0.92, 0.78)
+	lamp.light_energy = 0.95
+	lamp.omni_range = 8.0
+	lamp.light_color = Color(1.0, 0.90, 0.74)
 	lamp.position = Vector3(0, 1.6, 0)
 	lamp.shadow_enabled = false
 	add_child(lamp)
@@ -671,6 +799,21 @@ func _in_water() -> bool:
 	if world_manager == null:
 		return false
 	return world_manager.get_block(floori(global_position.x), floori(global_position.y + 0.9), floori(global_position.z)) == VoxelTypes.WATER
+
+## Muffle all audio (a low-pass on the Master bus) while the camera/head is submerged — the
+## classic "underwater" effect — and clear it the instant we surface. Only fires on a state
+## change, so it's a cheap per-frame check.
+func _update_underwater_audio() -> void:
+	if world_manager == null:
+		return
+	var hx := floori(global_position.x)
+	var hy := floori(global_position.y + CAM_HEIGHT)
+	var hz := floori(global_position.z)
+	var submerged: bool = world_manager.get_block(hx, hy, hz) == VoxelTypes.WATER
+	if submerged == _was_submerged:
+		return
+	_was_submerged = submerged
+	get_tree().call_group("ducker", "set_underwater", submerged)
 
 ## True when a solid (non-water) block is directly under the feet — the seabed.
 func _on_water_bed() -> bool:
@@ -690,6 +833,11 @@ func _physics_process(delta: float) -> void:
 		return
 	var on_floor := is_on_floor()
 	var in_water := _in_water()
+	_update_underwater_audio()
+	# Splash when plunging into water (a falling/jumping entry, not a slow wade-in).
+	if in_water and not _was_in_water and velocity.y < -2.0:
+		_emit_burst(global_position + Vector3(0, 0.3, 0), Color(0.72, 0.85, 1.0), 14, 0.5, 82.0, 1.5, 3.8, 6.0)
+	_was_in_water = in_water
 	if on_floor and not _was_on_floor:
 		if not _landed_once:
 			_landed_once = true
@@ -698,6 +846,7 @@ func _physics_process(delta: float) -> void:
 			if _fall_speed > 4.0 and not in_water:
 				_spawn_land_dust()
 				add_trauma(clampf((_fall_speed - 4.0) * 0.03, 0.0, 0.3))
+				_land_squash = clampf((_fall_speed - 3.0) * 0.06, 0.0, 0.5)   # camera knees-bend dip
 			if _fall_speed > FALL_DAMAGE_SPEED and not in_water:
 				hurt(int((_fall_speed - FALL_DAMAGE_SPEED) / 4.0) + 1)
 	_was_on_floor = on_floor
@@ -712,10 +861,10 @@ func _physics_process(delta: float) -> void:
 	right = right.normalized()
 	var iz := 0.0
 	var ix := 0.0
-	if Input.is_physical_key_pressed(KEY_W): iz -= 1.0
-	if Input.is_physical_key_pressed(KEY_S): iz += 1.0
-	if Input.is_physical_key_pressed(KEY_A): ix -= 1.0
-	if Input.is_physical_key_pressed(KEY_D): ix += 1.0
+	if Input.is_action_pressed("move_forward"): iz -= 1.0
+	if Input.is_action_pressed("move_back"): iz += 1.0
+	if Input.is_action_pressed("move_left"): ix -= 1.0
+	if Input.is_action_pressed("move_right"): ix += 1.0
 	var dir := fwd * (-iz) + right * ix
 	if dir.length() > 0.0:
 		dir = dir.normalized()
@@ -726,11 +875,11 @@ func _physics_process(delta: float) -> void:
 	if ui_open:
 		dir = Vector3.ZERO
 
-	var sprinting := Input.is_physical_key_pressed(KEY_CTRL) and not ui_open
+	var sprinting := Input.is_action_pressed("sprint") and not ui_open
 	if flying:
 		var v := dir * FLY_SPEED
-		if Input.is_physical_key_pressed(KEY_SPACE) and not ui_open: v.y += FLY_SPEED
-		if Input.is_physical_key_pressed(KEY_SHIFT) and not ui_open: v.y -= FLY_SPEED
+		if Input.is_action_pressed("jump") and not ui_open: v.y += FLY_SPEED
+		if Input.is_action_pressed("descend") and not ui_open: v.y -= FLY_SPEED
 		velocity = v
 	else:
 		var speed := SPRINT_SPEED if sprinting else WALK_SPEED
@@ -742,7 +891,7 @@ func _physics_process(delta: float) -> void:
 			# Buoyant swimming: Space rises, rest on the lakebed, else sink gently.
 			# (The seabed has no collider since its top face is culled under water,
 			#  so we stop the sink here instead of falling through it.)
-			if Input.is_physical_key_pressed(KEY_SPACE) and not ui_open:
+			if Input.is_action_pressed("jump") and not ui_open:
 				velocity.y = SWIM_UP_SPEED
 			elif _on_water_bed():
 				velocity.y = maxf(velocity.y, 0.0)
@@ -752,7 +901,7 @@ func _physics_process(delta: float) -> void:
 			# Don't fall through ground that hasn't streamed its collider in yet (prevents
 			# a long phantom fall + lethal fall-damage "death from nowhere").
 			velocity.y = 0.0 if _ground_streaming() else velocity.y - gravity * delta
-		elif Input.is_physical_key_pressed(KEY_SPACE) and not ui_open:
+		elif Input.is_action_pressed("jump") and not ui_open:
 			velocity.y = JUMP_VELOCITY
 		elif on_floor and dir.length() > 0.1:
 			_try_auto_step(dir)   # Minecraft-style: hop up a single-block ledge automatically
@@ -880,6 +1029,9 @@ func _update_camera_feel(delta: float, sprinting: bool, on_floor: bool) -> void:
 	var horiz := Vector2(velocity.x, velocity.z).length()
 	var target_fov := SPRINT_FOV if (sprinting and horiz > WALK_SPEED + 0.5) else BASE_FOV
 	camera.fov = lerpf(camera.fov, target_fov, delta * 8.0)
+	# Decay the landing dip unconditionally so it can't get stuck when in third person.
+	if _land_squash > 0.0:
+		_land_squash = maxf(0.0, _land_squash - delta * 3.2)
 	if not first_person:
 		return
 	var moving := on_floor and horiz > 0.5
@@ -890,8 +1042,11 @@ func _update_camera_feel(delta: float, sprinting: bool, on_floor: bool) -> void:
 		_bob_phase += delta * BOB_FREQ
 		tgt_y = -absf(sin(_bob_phase)) * BOB_AMP * amt
 		tgt_x = cos(_bob_phase) * BOB_AMP * 0.5 * amt
+	# Landing dip: the view drops on impact then springs back, reading as the knees absorbing
+	# the fall (the squash magnitude was set on landing, scaled by fall speed).
+	tgt_y -= _land_squash * BOB_AMP * 6.0
 	camera.position.x = lerpf(camera.position.x, tgt_x, delta * 10.0)
-	camera.position.y = lerpf(camera.position.y, tgt_y, delta * 10.0)
+	camera.position.y = lerpf(camera.position.y, tgt_y, delta * 14.0)
 	camera.rotation.z = lerpf(camera.rotation.z, tgt_x * 0.6, delta * 10.0)
 
 func _update_vitals(delta: float, moving: bool, sprinting: bool) -> void:
@@ -922,7 +1077,7 @@ func _update_animation() -> void:
 	if anim_player == null:
 		return
 	var horiz := Vector2(velocity.x, velocity.z).length()
-	var sprinting := Input.is_physical_key_pressed(KEY_CTRL)
+	var sprinting := Input.is_action_pressed("sprint")
 	var want := walk_anim
 	var freeze := false
 	if _mine_timer > 0.0 and mine_anim != "":
@@ -951,6 +1106,15 @@ func _handle_left() -> void:
 		_reset_mining()
 		_attack_mob(collider)
 		return
+	# A torch on the targeted face is what you remove first (before the block behind it).
+	var tcell := _cell_from_hit(0.5)
+	if world_manager.has_torch(tcell):
+		_reset_mining()
+		if world_manager.remove_torch(tcell):
+			collect_item(VoxelTypes.TORCH, 1)   # pick the torch back up
+			_play_snd(snd_break_soft)
+			on_inventory_changed()
+		return
 	_mine_terrain()
 
 func _attack_mob(mob) -> void:
@@ -975,6 +1139,11 @@ func _attack_mob(mob) -> void:
 	if mob.has_method("take_damage"):
 		mob.take_damage(dmg)
 		_play_snd(snd_monster)
+	if mob is Node3D:
+		# A red impact burst confirms the hit; heavier weapons (more damage) stagger harder.
+		_emit_burst((mob as Node3D).global_position + Vector3(0, 1.0, 0), Color(0.75, 0.10, 0.10), 8, 0.4, 65.0, 1.5, 3.5, 7.0)
+		if mob.has_method("apply_knockback"):
+			mob.apply_knockback((mob as Node3D).global_position - global_position, clampf(float(dmg) * 0.7, 2.0, 9.0))
 
 func _mine_terrain() -> void:
 	var cell := _cell_from_hit(-0.5)
@@ -1084,6 +1253,14 @@ func _try_place() -> void:
 	if _cell_overlaps_player(cell):
 		return
 	_place_cd = 0.18
+	# Torches are light props placed into the empty cell, not voxels.
+	if id == VoxelTypes.TORCH:
+		if world_manager.get_block(cell.x, cell.y, cell.z) == VoxelTypes.AIR and world_manager.place_torch(cell):
+			inventory.remove_one(selected)
+			_play_snd(snd_place)
+			_vm_place = 1.0
+			on_inventory_changed()
+		return
 	world_manager.set_block(cell.x, cell.y, cell.z, id)
 	# If we built straight down at our own feet, step up onto the new block so we don't
 	# end up stuck inside it (Minecraft-style pillar-up).
@@ -1092,6 +1269,9 @@ func _try_place() -> void:
 		velocity.y = 0.0
 	inventory.remove_one(selected)
 	_play_snd(snd_place)
+	_vm_place = 1.0                        # first-person placing "push" on the viewmodel
+	# A small dust poof on placement (matches the break-particle feedback).
+	_emit_burst(Vector3(cell) + Vector3(0.5, 0.5, 0.5), VoxelTypes.color_of(id), 8, 0.4, 78.0, 0.8, 2.0, 5.0)
 	on_inventory_changed()
 
 func _try_eat() -> void:
@@ -1325,52 +1505,11 @@ func _spawn_drop(cell: Vector3i, id: int) -> void:
 
 ## A low, outward puff of dusty tan particles at the feet when landing from a fall.
 func _spawn_land_dust() -> void:
-	if world_manager == null:
-		return
-	var p := CPUParticles3D.new()
-	var bm := BoxMesh.new()
-	bm.size = Vector3(0.1, 0.1, 0.1)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.72, 0.66, 0.52)
-	bm.material = mat
-	p.mesh = bm
-	p.amount = 14
-	p.one_shot = true
-	p.lifetime = 0.5
-	p.explosiveness = 0.9
-	p.direction = Vector3.UP
-	p.spread = 88.0                       # near-horizontal — dust kicks out sideways
-	p.initial_velocity_min = 1.0
-	p.initial_velocity_max = 2.4
-	p.gravity = Vector3(0, -6.0, 0)
-	p.emitting = true
-	world_manager.add_child(p)
-	p.global_position = global_position + Vector3(0, 0.1, 0)
-	p.finished.connect(p.queue_free)
+	# spread 88° -> near-horizontal, dust kicks out sideways
+	_emit_burst(global_position + Vector3(0, 0.1, 0), Color(0.72, 0.66, 0.52), 14, 0.5, 88.0, 1.0, 2.4, 6.0)
 
 func _spawn_break_particles(pos: Vector3, color: Color) -> void:
-	if world_manager == null:
-		return
-	var p := CPUParticles3D.new()
-	var bm := BoxMesh.new()
-	bm.size = Vector3(0.12, 0.12, 0.12)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	bm.material = mat
-	p.mesh = bm
-	p.amount = 12
-	p.one_shot = true
-	p.lifetime = 0.6
-	p.explosiveness = 0.9
-	p.direction = Vector3.UP
-	p.spread = 70.0
-	p.initial_velocity_min = 1.5
-	p.initial_velocity_max = 3.0
-	p.gravity = Vector3(0, -9.0, 0)
-	p.emitting = true
-	world_manager.add_child(p)
-	p.global_position = pos
-	p.finished.connect(p.queue_free)
+	_emit_burst(pos, color, 12, 0.6, 70.0, 1.5, 3.0, 9.0)
 
 func _cell_from_hit(offset: float) -> Vector3i:
 	var p := ray.get_collision_point()

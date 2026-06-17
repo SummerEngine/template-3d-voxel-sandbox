@@ -55,3 +55,36 @@ static func make_button(text: String, kind: String = "normal", min_size := Vecto
 	b.add_theme_stylebox_override("pressed", _btn_box(bg.darkened(0.15), border))
 	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	return b
+
+## A labelled settings row: "Name [====slider====] value". `fmt` formats the value label
+## from the slider value; `on_change` is called with the new value as the user drags. Used by
+## both the main-menu and pause settings panels so they look and behave identically.
+static func setting_row(label_text: String, minv: float, maxv: float, step: float,
+		value: float, fmt: Callable, on_change: Callable) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	var name := Label.new()
+	name.text = label_text
+	name.custom_minimum_size = Vector2(150, 0)
+	name.add_theme_font_size_override("font_size", FONT_SIZE)
+	name.add_theme_color_override("font_color", Color(1, 1, 1))
+	row.add_child(name)
+	var slider := HSlider.new()
+	slider.min_value = minv
+	slider.max_value = maxv
+	slider.step = step
+	slider.value = value
+	slider.custom_minimum_size = Vector2(220, 0)
+	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(slider)
+	var val := Label.new()
+	val.custom_minimum_size = Vector2(64, 0)
+	val.text = fmt.call(value)
+	val.add_theme_font_size_override("font_size", FONT_SIZE)
+	val.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0))
+	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	row.add_child(val)
+	slider.value_changed.connect(func(v):
+		val.text = fmt.call(v)
+		on_change.call(v))
+	return row

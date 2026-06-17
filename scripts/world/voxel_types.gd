@@ -49,6 +49,8 @@ const GOLD_INGOT := 104
 const DIAMOND := 105
 const RAW_MEAT := 106
 const COOKED_MEAT := 107
+const TORCH := 108            # placeable light source (a prop + OmniLight, not a voxel)
+const ROTTEN_FLESH := 109     # zombie drop: edible but a weak, slightly grim food
 
 # Extra atlas tiles that aren't a block's main face: item icons (28-35) and the log
 # ring-top (36). Tile index = row*8 + col in the 8x8 atlas.
@@ -108,13 +110,15 @@ static func tile_index(id: int) -> int:
 		APPLE:       return 33
 		RAW_MEAT:    return 34
 		COOKED_MEAT: return 35
+		ROTTEN_FLESH: return 34
+		TORCH:       return 26            # reuse the fiery lava tile as the torch icon
 		_:           return atlas_index(id)
 
 static func is_solid(t: int) -> bool:
 	return t != AIR
 
 static func is_placeable(id: int) -> bool:
-	return id >= GRASS and id <= MAX_BLOCK
+	return (id >= GRASS and id <= MAX_BLOCK) or id == TORCH   # TORCH places a light prop, not a voxel
 
 static func is_item(id: int) -> bool:
 	return id >= ITEM_BASE
@@ -197,6 +201,8 @@ static func name_of(id: int) -> String:
 		DIAMOND:     return "Diamond"
 		RAW_MEAT:    return "Raw Meat"
 		COOKED_MEAT: return "Cooked Steak"
+		ROTTEN_FLESH: return "Rotten Flesh"
+		TORCH:       return "Torch"
 		_:           return "?"
 
 ## Hunger restored when this item is eaten (0 = not food). Cooking roughly triples the
@@ -206,6 +212,7 @@ static func food_value(id: int) -> int:
 		APPLE:       return 3
 		RAW_MEAT:    return 2
 		COOKED_MEAT: return 6
+		ROTTEN_FLESH: return 2
 		_:           return 0
 
 ## Approximate solid colour for drops, break particles and hotbar swatches.
@@ -247,4 +254,6 @@ static func color_of(id: int) -> Color:
 		DIAMOND:     return Color(0.45, 0.85, 0.88)
 		RAW_MEAT:    return Color(0.78, 0.34, 0.38)
 		COOKED_MEAT: return Color(0.48, 0.26, 0.15)
+		ROTTEN_FLESH: return Color(0.40, 0.46, 0.28)
+		TORCH:       return Color(1.0, 0.6, 0.2)
 		_:           return Color(1, 0, 1)
