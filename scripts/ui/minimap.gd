@@ -29,6 +29,12 @@ var _t := 0.0
 var _full := false
 var _last_cx := 999999          # last sampled centre — skip redraw while standing still
 var _last_cz := 999999
+const ROWS_PER_FRAME := 4       # amortize the RES-row resample so no single frame stalls
+var _building := false          # a map build is in progress (filled a few rows per frame)
+var _build_row := 0
+var _build_px := 0
+var _build_pz := 0
+var _build_step := STEP_MINI
 
 func setup(w, p) -> void:
 	world = w
@@ -66,7 +72,7 @@ func _ready() -> void:
 	add_child(_arrow)
 
 	_layout()
-	_redraw()
+	_start_redraw()
 
 func _layout() -> void:
 	var vp := get_viewport().get_visible_rect().size
@@ -84,7 +90,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_M:
 		_full = not _full
 		_layout()
-		_redraw()
+		_start_redraw()
 		get_viewport().set_input_as_handled()
 
 func _process(delta: float) -> void:
@@ -95,6 +101,8 @@ func _process(delta: float) -> void:
 	if cam and is_instance_valid(cam):
 		var fwd: Vector3 = -cam.global_transform.basis.z
 		_arrow.rotation = atan2(fwd.x, -fwd.z)
+	if _building:
+		_build_rows()                      # fill a few rows of the in-progress map this frame
 	_t -= delta
 	if _t <= 0.0:
 		_t = UPDATE
@@ -104,19 +112,32 @@ func _process(delta: float) -> void:
 		if absi(cx - _last_cx) >= step or absi(cz - _last_cz) >= step:
 			_last_cx = cx
 			_last_cz = cz
-			_redraw()
+			_start_redraw()
 
-func _redraw() -> void:
+## Start a fresh map build, captured around the player's CURRENT position. The RES rows are
+## then filled a few per frame by _build_rows — the old all-at-once resample cost ~35 ms (a
+## guaranteed dropped frame every 0.8 s while moving).
+func _start_redraw() -> void:
 	if world == null or not world.has_method("biome_at"):
 		return
-	var step := STEP_FULL if _full else STEP_MINI
-	var px := int(player.global_position.x)
-	var pz := int(player.global_position.z)
+	_build_step = STEP_FULL if _full else STEP_MINI
+	_build_px = int(player.global_position.x)
+	_build_pz = int(player.global_position.z)
+	_build_row = 0
+	_building = true
+
+## Fill the next ROWS_PER_FRAME rows; swap the displayed texture only when the build completes,
+## so the map never shows a half-old/half-new frame.
+func _build_rows() -> void:
 	var mid := int(RES / 2.0)
-	for y in range(RES):
-		var wz := pz + (y - mid) * step
+	var end_row := mini(_build_row + ROWS_PER_FRAME, RES)
+	for y in range(_build_row, end_row):
+		var wz := _build_pz + (y - mid) * _build_step
 		for x in range(RES):
-			var wx := px + (x - mid) * step
+			var wx := _build_px + (x - mid) * _build_step
 			var b: String = world.biome_at(wx, wz)
 			_img.set_pixel(x, y, COLORS.get(b, Color(0.5, 0.5, 0.5)))
-	_tex.update(_img)
+	_build_row = end_row
+	if _build_row >= RES:
+		_building = false
+		_tex.update(_img)

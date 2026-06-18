@@ -44,6 +44,22 @@ var _last_yaw := 0.0
 var _avoid_t := 0.0                   # throttle terrain-avoidance world queries (not every frame)
 var _anim_player: AnimationPlayer     # the model's own AnimationPlayer, if it's a rigged model
 var _has_clip := false                # true -> a baked clip drives the body (skip procedural anim)
+var _flap := 0.5                      # bird flap intensity envelope: flap to climb, glide to dive
+var _snd_amb: AudioStreamPlayer3D     # positional ambient: bird call (chirp/caw/quack) or water bloop
+var _amb_t := 0.0                     # countdown to the next ambient sound
+var _voice_pitch := 1.0               # per-individual pitch so a flock doesn't sound cloned
+var _bubbles: CPUParticles3D          # fish bubble trail (water mode)
+
+const SND_CALLS := {
+	"chirp":  "res://assets/audio/sfx/fauna/chirp.mp3",   # songbird, parrot
+	"caw":    "res://assets/audio/sfx/fauna/caw.mp3",     # vulture
+	"quack":  "res://assets/audio/sfx/fauna/quack.mp3",   # duck
+	"moo":    "res://assets/audio/sfx/fauna/moo.mp3",     # cow
+	"baa":    "res://assets/audio/sfx/fauna/baa.mp3",     # sheep
+	"oink":   "res://assets/audio/sfx/fauna/oink.mp3",    # pig
+	"hiss":   "res://assets/audio/sfx/fauna/hiss.mp3",    # snake, lizard, crocodile
+	"splash": "res://assets/audio/sfx/fauna/splash.mp3",  # fish, turtle (water default)
+}
 
 func setup(c: Dictionary, w, p) -> void:
 	cfg = c
@@ -71,7 +87,75 @@ func _ready() -> void:
 	add_child(col)
 
 	_build_visual()
+	_setup_audio()
+	_setup_vfx()
 	_pick_dir()
+
+## Positional ambient sound: birds get their call (chirp/caw/quack), water creatures a soft
+## splash bloop. Each individual gets a pitch so a flock/shoal doesn't sound copy-pasted.
+func _setup_audio() -> void:
+	_voice_pitch = _rng.randf_range(0.9, 1.15)
+	var call_name := String(cfg.get("call", ""))
+	if call_name == "" and _mode == WATER:
+		call_name = "splash"               # fish/turtle bloop by default if no specific call
+	var path := String(SND_CALLS.get(call_name, ""))
+	if path == "" or not ResourceLoader.exists(path):
+		return                             # silent species (rabbit, frog, monkey, camel)
+	_amb_t = _rng.randf_range(2.0, 7.0) if _mode == AIR else _rng.randf_range(5.0, 12.0)
+	var p := AudioStreamPlayer3D.new()
+	p.stream = load(path)
+	p.volume_db = -7.0 if _mode == AIR else -9.0
+	p.unit_size = 10.0
+	p.max_distance = 42.0
+	if AudioServer.get_bus_index("SFX") != -1:
+		p.bus = "SFX"
+	add_child(p)
+	_snd_amb = p
+
+## Tick the ambient sound; only actually play when the player is near (no distant chatter — and
+## it saves audio voices, the real cost). Re-arms to a fresh random interval each time.
+func _amb_tick(delta: float, lo: float, hi: float) -> void:
+	if _snd_amb == null:
+		return
+	_amb_t -= delta
+	if _amb_t > 0.0:
+		return
+	_amb_t = _rng.randf_range(lo, hi)
+	if player and is_instance_valid(player) \
+			and global_position.distance_to(player.global_position) < 36.0 \
+			and not _snd_amb.playing:
+		_snd_amb.pitch_scale = _voice_pitch * _rng.randf_range(0.96, 1.04)
+		_snd_amb.play()
+
+## Fish leave a trail of tiny rising bubbles (voxel-cube bubbles, on theme). One small CPU
+## emitter per water creature (~10 particles), only emitting while actually swimming.
+func _setup_vfx() -> void:
+	if _mode != WATER:
+		return
+	var p := CPUParticles3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(0.06, 0.06, 0.06)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.75, 0.88, 1.0, 0.45)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.emission_enabled = true
+	mat.emission = Color(0.7, 0.85, 1.0)
+	mat.emission_energy_multiplier = 0.4
+	bm.material = mat
+	p.mesh = bm
+	p.amount = 10
+	p.lifetime = 1.3
+	p.direction = Vector3.UP
+	p.spread = 12.0
+	p.initial_velocity_min = 0.3
+	p.initial_velocity_max = 0.9
+	p.gravity = Vector3(0, 1.1, 0)         # bubbles rise
+	p.scale_amount_min = 0.4
+	p.scale_amount_max = 1.0
+	p.position = Vector3(0, float(cfg.get("size", 0.6)) * 0.4, 0)
+	p.emitting = false                     # toggled by swim speed
+	add_child(p)
+	_bubbles = p
 
 func _build_visual() -> void:
 	var path := String(cfg.get("model", ""))
@@ -165,12 +249,44 @@ func _build_box_fallback(h: float) -> void:
 func take_damage(amount: int) -> void:
 	health -= amount
 	if health <= 0:
+		if _mode == AIR:
+			_feather_burst()          # a puff of down where the bird drops
+		else:
+			_death_poof()             # a burst of the creature's colour for ground/water animals
 		if _meat:
 			_drop_meat()
 		queue_free()
 		return
 	_flee = 1.4
 	_pick_dir(true)
+
+## A small one-shot puff of fluttering feathers (species-coloured) when a bird is killed.
+func _feather_burst() -> void:
+	var parent := get_parent()
+	if parent == null:
+		return
+	var p := CPUParticles3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(0.08, 0.02, 0.12)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = cfg.get("color", Color(0.85, 0.85, 0.85))
+	bm.material = mat
+	p.mesh = bm
+	p.amount = 12
+	p.one_shot = true
+	p.lifetime = 1.1
+	p.explosiveness = 0.85
+	p.direction = Vector3.UP
+	p.spread = 70.0
+	p.initial_velocity_min = 1.0
+	p.initial_velocity_max = 2.5
+	p.gravity = Vector3(0, -2.0, 0)            # feathers flutter gently down
+	p.damping_min = 1.0
+	p.damping_max = 2.0
+	p.emitting = true
+	parent.add_child(p)
+	p.global_position = global_position + Vector3(0, 0.3, 0)
+	p.finished.connect(p.queue_free)
 
 func flash() -> void:
 	if _flash_meshes.is_empty():
@@ -192,6 +308,33 @@ func _clear_flash() -> void:
 		var m = _flash_meshes[i]
 		if is_instance_valid(m):
 			m.material_override = _base_overrides[i] if i < _base_overrides.size() else null
+
+## A short burst of the creature's colour when a ground/water animal dies (birds use
+## _feather_burst). One-shot, parented to the scene so it outlives the freed creature.
+func _death_poof() -> void:
+	var parent := get_parent()
+	if parent == null:
+		return
+	var p := CPUParticles3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(0.1, 0.1, 0.1)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = cfg.get("color", Color(0.7, 0.7, 0.7))
+	bm.material = mat
+	p.mesh = bm
+	p.amount = 12
+	p.one_shot = true
+	p.lifetime = 0.6
+	p.explosiveness = 0.9
+	p.direction = Vector3.UP
+	p.spread = 75.0
+	p.initial_velocity_min = 1.4
+	p.initial_velocity_max = 3.0
+	p.gravity = Vector3(0, -7.0, 0)
+	p.emitting = true
+	parent.add_child(p)
+	p.global_position = global_position + Vector3(0.0, float(cfg.get("size", 0.8)) * 0.35, 0.0)
+	p.finished.connect(p.queue_free)
 
 func _drop_meat() -> void:
 	if world == null:
@@ -252,6 +395,7 @@ func _move_ground(delta: float) -> void:
 		look_at(global_position + Vector3(_dir.x, 0.0, _dir.z), Vector3.UP)
 	move_and_slide()
 	_anim_ground(delta)
+	_amb_tick(delta, 7.0, 14.0)   # cows moo, sheep baa, snakes hiss, etc.
 
 func _avoid_ground_hazards() -> void:
 	if world == null or Vector2(_dir.x, _dir.z).length() < 0.1:
@@ -308,18 +452,23 @@ func _move_air(delta: float) -> void:
 		look_at(global_position + h, Vector3.UP)
 	move_and_slide()
 	_anim_air(delta, vy)
+	_amb_tick(delta, 4.0, 9.0)
 
 func _anim_air(delta: float, vy: float) -> void:
 	if _model == null or _has_clip:
 		return
-	_phase += delta * 9.0
-	# Wing flap reads as a body bob; bank into the turn; pitch with climb/dive.
-	_model.position.y = _rest_y + sin(_phase) * 0.10
+	# Flap-glide rhythm: flap hard to climb, ease into a glide when descending/cruising — an
+	# emergent wingbeat instead of a constant bob. Flap also beats faster the harder it works.
+	var flap_target := clampf(0.35 + vy * 0.30, 0.12, 1.0)
+	_flap = lerpf(_flap, flap_target, delta * 3.0)
+	_phase += delta * (9.0 + _flap * 7.0)
+	var beat := sin(_phase)
+	_model.position.y = _rest_y + beat * 0.13 * _flap          # body lifts on the downstroke
 	var turn := wrapf(rotation.y - _last_yaw, -PI, PI)
 	_last_yaw = rotation.y
-	_bank = lerpf(_bank, clampf(turn * 6.0, -0.5, 0.5), delta * 5.0)
-	_model.rotation.z = _bank + sin(_phase) * 0.18
-	_model.rotation.x = lerpf(_model.rotation.x, clampf(-vy * 0.12, -0.4, 0.4), delta * 4.0)
+	_bank = lerpf(_bank, clampf(turn * 7.0, -0.6, 0.6), delta * 5.0)
+	_model.rotation.z = _bank + beat * 0.22 * _flap            # wings rock with the beat + bank into turns
+	_model.rotation.x = lerpf(_model.rotation.x, clampf(-vy * 0.14, -0.45, 0.45), delta * 4.0)  # nose up climbing
 
 # --- WATER ----------------------------------------------------------------------------
 func _move_water(delta: float) -> void:
@@ -348,7 +497,10 @@ func _move_water(delta: float) -> void:
 	if h.length() > 0.1:
 		look_at(global_position + h, Vector3.UP)
 	move_and_slide()
-	_anim_water(delta)
+	_anim_water(delta, vy)
+	if _bubbles:
+		_bubbles.emitting = velocity.length() > 0.4   # bubble only while actually swimming
+	_amb_tick(delta, 6.0, 12.0)
 
 ## Turn back when the water ahead becomes land/shallows.
 func _avoid_shore() -> void:
@@ -360,13 +512,16 @@ func _avoid_shore() -> void:
 		_dir = Vector3(sin(a), _rng.randf_range(-0.15, 0.15), cos(a)).normalized()
 		_timer = _rng.randf_range(1.0, 2.0)
 
-func _anim_water(delta: float) -> void:
+func _anim_water(delta: float, vy: float) -> void:
 	if _model == null or _has_clip:
 		return
-	_phase += delta * (7.0 + _speed)
-	# Tail wiggle (yaw sway) + a gentle body roll — reads as swimming.
-	_model.rotation.y = _yaw + sin(_phase) * 0.28
-	_model.rotation.z = sin(_phase * 0.5) * 0.10
+	_phase += delta * (8.0 + _speed * 1.5)
+	var wig := sin(_phase)
+	# Stronger tail wiggle (yaw) + body roll, AND pitch the body to its dive/climb so it noses
+	# up/down through the water instead of swimming dead flat (the old bug).
+	_model.rotation.y = _yaw + wig * 0.34
+	_model.rotation.z = sin(_phase * 0.6) * 0.12
+	_model.rotation.x = lerpf(_model.rotation.x, clampf(-vy * 0.5, -0.5, 0.5), delta * 5.0)
 
 # --- model fitting --------------------------------------------------------------------
 ## Scale so the model's LONGEST dimension equals `target` (preserving proportions), then

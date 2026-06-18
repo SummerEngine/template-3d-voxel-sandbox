@@ -22,9 +22,10 @@ const SIGHT_RANGE := 20.0
 const ATTACK_RANGE := 1.6
 const ATTACK_CD := 1.0
 const DAMAGE := 1
-const ZOMBIE_HEIGHT := 2.0       # fit target on the BIND/REST pose; animated stance renders ~1.5 m (player 1.8)
+const BODY_H := 2.0              # the live code-built rig stands ~2.0 m (head box tops ~1.97) — a touch over the 1.8 m player
+const ZOMBIE_HEIGHT := 2.0       # rest-fit target for the UNUSED GLB fallback (_fit_skinned); the rig is the live visual
 const HUNCH := -0.18              # permanent forward lean (rad) — a shambling, lunging posture
-const ARM_REST := -1.45           # arms held straight out forward (the reaching pose)
+const ARM_REST := 1.45            # arms reach straight out FRONT (+x rot tips the arm toward -Z, the facing dir)
 const RIG_HUNCH := -0.14          # resting forward lean — a shambling posture
 
 var gravity: float = float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
@@ -84,10 +85,10 @@ func _ready() -> void:
 
 	_col = CollisionShape3D.new()
 	var cap := CapsuleShape3D.new()
-	cap.height = ZOMBIE_HEIGHT * _size      # match the visual fit so headshots register
+	cap.height = BODY_H * _size              # match the rendered body so headshots register
 	cap.radius = 0.32 * _size
 	_col.shape = cap
-	_col.position = Vector3(0, ZOMBIE_HEIGHT * 0.5 * _size, 0)   # centred so the feet rest on y=0
+	_col.position = Vector3(0, BODY_H * 0.5 * _size, 0)   # centred so the feet rest on y=0
 	add_child(_col)
 
 	_build_visual()
@@ -436,7 +437,7 @@ func _spawn_fire_vfx() -> void:
 	p.gravity = Vector3(0, 1.6, 0)        # embers rise
 	p.scale_amount_min = 0.4
 	p.scale_amount_max = 1.0
-	p.position = Vector3(0, ZOMBIE_HEIGHT * 0.5 * _size, 0)
+	p.position = Vector3(0, BODY_H * 0.5 * _size, 0)
 	p.emitting = true
 	add_child(p)
 	_fire = p
@@ -664,7 +665,7 @@ func _anim_articulated(delta: float) -> void:
 		var arc := sin((1.0 - _punch) * PI)             # 0 -> 1 -> 0
 		_model.rotation.x = RIG_HUNCH - 0.5 * arc       # body lunges forward from the hunch
 		_model.position.y = _model_rest_y - 0.05 * arc
-		var thrust := ARM_REST - 0.5 * arc              # arms snap forward to grab
+		var thrust := ARM_REST + 0.5 * arc              # arms snap further forward/up to grab
 		_arm_l.rotation.x = thrust
 		_arm_r.rotation.x = thrust
 		_arm_l.rotation.z = 0.0

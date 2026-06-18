@@ -81,6 +81,12 @@ func to_data() -> Array:
 	return out
 
 func from_data(data: Array) -> void:
+	# Clear every slot first: the player is built with a starter kit before a save loads, and a
+	# short/legacy/corrupt save only overwrites the rows it has — without this, leftover starter
+	# items would survive in the un-overwritten slots (a duplicated inventory on load).
+	for s in slots:
+		s.id = VoxelTypes.AIR
+		s.count = 0
 	for i in range(mini(SIZE, data.size())):
 		var row = data[i]
 		if row is Array and row.size() >= 2:   # tolerate malformed/corrupt rows

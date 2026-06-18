@@ -139,6 +139,19 @@ func _ready() -> void:
 	minimap.setup(world, player)
 	add_child(minimap)
 
+	# Living-world ambience: fireflies at night, pollen motes by day, occasional shooting stars.
+	var ambience := preload("res://scripts/world/ambience.gd").new()
+	ambience.name = "Ambience"
+	ambience.setup(player, day_night)
+	add_child(ambience)
+
+	# Discoverable structures: ruined towers, crypts (with a guardian), and treasure caches,
+	# scattered as you explore — each holding a loot chest. Makes exploration rewarding.
+	var structures := preload("res://scripts/world/structures.gd").new()
+	structures.name = "Structures"
+	structures.setup(world, player)
+	add_child(structures)
+
 	# Apply saved player state after everything exists.
 	if not save.is_empty():
 		if save.has("player"):

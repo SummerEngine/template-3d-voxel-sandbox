@@ -17,24 +17,24 @@ const A := "res://assets/models/animals/"
 var CREATURES := [
 	# --- desert ---
 	{"biomes": ["desert"], "model": A + "camel.glb", "mode": 0, "size": 2.1, "speed": 1.6, "run": 4.0, "meat": true, "color": Color(0.78, 0.66, 0.40)},
-	{"biomes": ["desert"], "model": A + "vulture.glb", "mode": 1, "size": 1.0, "speed": 5.0, "alt": 16.0, "color": Color(0.25, 0.20, 0.18)},
-	{"biomes": ["desert"], "model": A + "sand_lizard.glb", "mode": 0, "gait": "slither", "size": 0.9, "speed": 2.6, "run": 5.0, "color": Color(0.80, 0.70, 0.45)},
+	{"biomes": ["desert"], "model": A + "vulture.glb", "mode": 1, "size": 1.0, "speed": 5.0, "alt": 16.0, "call": "caw", "color": Color(0.25, 0.20, 0.18)},
+	{"biomes": ["desert"], "model": A + "sand_lizard.glb", "mode": 0, "gait": "slither", "size": 0.9, "speed": 2.6, "run": 5.0, "call": "hiss", "color": Color(0.80, 0.70, 0.45)},
 	# --- meadow / plains (+ the existing farm animals) ---
-	{"biomes": ["meadow", "forest"], "model": A + "cow.glb", "mode": 0, "size": 1.3, "speed": 1.8, "meat": true, "color": Color(0.90, 0.90, 0.88)},
-	{"biomes": ["meadow", "forest"], "model": A + "sheep.glb", "mode": 0, "size": 1.1, "speed": 1.8, "meat": true, "color": Color(0.95, 0.95, 0.92)},
-	{"biomes": ["meadow"], "model": A + "pig.glb", "mode": 0, "size": 1.0, "speed": 2.0, "meat": true, "color": Color(0.92, 0.70, 0.70)},
+	{"biomes": ["meadow", "forest"], "model": A + "cow.glb", "mode": 0, "size": 1.3, "speed": 1.8, "meat": true, "call": "moo", "color": Color(0.90, 0.90, 0.88)},
+	{"biomes": ["meadow", "forest"], "model": A + "sheep.glb", "mode": 0, "size": 1.1, "speed": 1.8, "meat": true, "call": "baa", "color": Color(0.95, 0.95, 0.92)},
+	{"biomes": ["meadow"], "model": A + "pig.glb", "mode": 0, "size": 1.0, "speed": 2.0, "meat": true, "call": "oink", "color": Color(0.92, 0.70, 0.70)},
 	{"biomes": ["meadow"], "model": A + "rabbit.glb", "mode": 0, "gait": "hop", "size": 0.5, "speed": 2.6, "run": 6.0, "color": Color(0.60, 0.45, 0.32)},
-	{"biomes": ["meadow", "forest"], "model": A + "songbird.glb", "mode": 1, "size": 0.35, "speed": 6.0, "alt": 9.0, "color": Color(0.70, 0.30, 0.20)},
+	{"biomes": ["meadow", "forest"], "model": A + "songbird.glb", "mode": 1, "size": 0.35, "speed": 6.0, "alt": 9.0, "call": "chirp", "color": Color(0.70, 0.30, 0.20)},
 	{"biomes": ["meadow"], "model": A + "frog.glb", "mode": 0, "gait": "hop", "size": 0.4, "speed": 1.6, "run": 3.5, "color": Color(0.30, 0.60, 0.25)},
 	# --- forest / jungle ---
 	{"biomes": ["forest"], "model": A + "monkey.glb", "mode": 0, "size": 0.9, "speed": 2.4, "run": 5.0, "color": Color(0.50, 0.35, 0.22)},
-	{"biomes": ["forest"], "model": A + "parrot.glb", "mode": 1, "size": 0.5, "speed": 5.0, "alt": 11.0, "color": Color(0.20, 0.70, 0.30)},
-	{"biomes": ["forest", "meadow"], "model": A + "snake.glb", "mode": 0, "gait": "slither", "size": 1.5, "speed": 2.0, "color": Color(0.30, 0.55, 0.25)},
+	{"biomes": ["forest"], "model": A + "parrot.glb", "mode": 1, "size": 0.5, "speed": 5.0, "alt": 11.0, "call": "chirp", "color": Color(0.20, 0.70, 0.30)},
+	{"biomes": ["forest", "meadow"], "model": A + "snake.glb", "mode": 0, "gait": "slither", "size": 1.5, "speed": 2.0, "call": "hiss", "color": Color(0.30, 0.55, 0.25)},
 	# --- river / sea ---
 	{"biomes": ["water"], "model": A + "fish.glb", "mode": 2, "size": 0.6, "speed": 3.0, "run": 5.0, "color": Color(0.90, 0.50, 0.20)},
-	{"biomes": ["water"], "model": A + "crocodile.glb", "mode": 2, "size": 2.4, "speed": 2.2, "meat": true, "color": Color(0.30, 0.40, 0.25)},
+	{"biomes": ["water"], "model": A + "crocodile.glb", "mode": 2, "size": 2.4, "speed": 2.2, "meat": true, "call": "hiss", "color": Color(0.30, 0.40, 0.25)},
 	{"biomes": ["water"], "model": A + "turtle.glb", "mode": 2, "size": 0.8, "speed": 1.4, "color": Color(0.35, 0.50, 0.30)},
-	{"biomes": ["water"], "model": A + "duck.glb", "mode": 1, "size": 0.6, "speed": 3.5, "alt": 6.0, "color": Color(0.90, 0.90, 0.85)},
+	{"biomes": ["water"], "model": A + "duck.glb", "mode": 1, "size": 0.6, "speed": 3.5, "alt": 6.0, "call": "quack", "color": Color(0.90, 0.90, 0.85)},
 ]
 
 var world
@@ -114,7 +114,7 @@ func _spawn_y(x: int, z: int, mode: int) -> float:
 			var lo := sh + 0.8
 			var hi := float(world.SEA_LEVEL) - 0.8
 			if lo >= hi:
-				return hi                                # too-shallow water: just under the surface
+				return sh + 0.5                          # too-shallow: just above the bed, never inside it
 			return clampf((sh + float(world.SEA_LEVEL)) * 0.5, lo, hi)  # mid-column
 		_:
 			return sh + 2.0                                              # ground
