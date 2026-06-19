@@ -2,7 +2,7 @@ extends Control
 
 ## Themed main menu: a voxel-landscape background, the chroma-keyed VOXEL CREATIONS
 ## logo, a wood-framed panel of chunky buttons, a player profile chip, a settings
-## gear and a version label. Single-player template -> Multiplayer shows a note.
+## gear and a version label. Single-player template.
 
 const BG_PATH := "res://assets/textures/menu/background.png"
 const LOGO_PATH := "res://assets/textures/menu/logo.png"
@@ -12,7 +12,6 @@ const PROFILE_NAME := "BlockyBuilder"
 
 const OPTIONS := [
 	{"id": "single", "text": "SINGLE PLAYER", "kind": "primary"},
-	{"id": "multi", "text": "MULTI PLAYER", "kind": "gold"},
 	{"id": "create", "text": "CREATE NEW WORLD", "kind": "normal"},
 	{"id": "load", "text": "LOAD WORLD", "kind": "normal"},
 	{"id": "settings", "text": "SETTINGS", "kind": "normal"},
@@ -276,8 +275,6 @@ func _on_option(id: String) -> void:
 		"settings":
 			if _settings:
 				_settings.visible = true
-		"multi":
-			_show_toast("Multiplayer isn't available — single-player template")
 		"exit":
 			get_tree().quit()
 
