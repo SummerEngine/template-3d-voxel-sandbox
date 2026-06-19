@@ -45,6 +45,9 @@ var _avoid_t := 0.0                   # throttle terrain-avoidance world queries
 var _anim_player: AnimationPlayer     # the model's own AnimationPlayer, if it's a rigged model
 var _has_clip := false                # true -> a baked clip drives the body (skip procedural anim)
 var _flap := 0.5                      # bird flap intensity envelope: flap to climb, glide to dive
+var _fit_w := 0.8                      # the fitted model's real dimensions (set by _fit_model)
+var _fit_h := 0.8
+var _fit_d := 0.8
 var _snd_amb: AudioStreamPlayer3D     # positional ambient: bird call (chirp/caw/quack) or water bloop
 var _amb_t := 0.0                     # countdown to the next ambient sound
 var _voice_pitch := 1.0               # per-individual pitch so a flock doesn't sound cloned
@@ -78,18 +81,22 @@ func _ready() -> void:
 	_meat = bool(cfg.get("meat", false))
 	health = int(cfg.get("health", 4))
 
-	var col := CollisionShape3D.new()
-	var box := BoxShape3D.new()
-	var sz := float(cfg.get("size", 0.9))
-	box.size = Vector3(maxf(0.4, sz * 0.7), maxf(0.4, sz * 0.85), maxf(0.5, sz))
-	col.shape = box
-	col.position = Vector3(0, box.size.y * 0.5, 0)
-	add_child(col)
-
-	_build_visual()
+	_build_visual()      # fits the model and records its real dimensions (_fit_w/_fit_h/_fit_d)
+	_setup_collider()    # collider sized to the FITTED model, not the longest-dimension guess
 	_setup_audio()
 	_setup_vfx()
 	_pick_dir()
+
+## Collision box matched to the model's actual fitted size, so a long flat snake gets a flat
+## box (not a tall cube) — that stops oversized colliders catching on terrain and floating the
+## creature a block above the ground. Feet sit at the body origin (y=0).
+func _setup_collider() -> void:
+	var col := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(maxf(0.35, _fit_w * 0.85), maxf(0.35, _fit_h), maxf(0.35, _fit_d * 0.85))
+	col.shape = box
+	col.position = Vector3(0, box.size.y * 0.5, 0)
+	add_child(col)
 
 ## Positional ambient sound: birds get their call (chirp/caw/quack), water creatures a soft
 ## splash bloop. Each individual gets a pitch so a flock/shoal doesn't sound copy-pasted.
@@ -244,6 +251,9 @@ func _build_box_fallback(h: float) -> void:
 	_rest_y = body.position.y
 	_flash_meshes = [body]
 	_base_overrides = [mat]
+	_fit_w = h * 0.7     # fallback box dimensions, for the collider
+	_fit_h = h * 0.7
+	_fit_d = h
 
 # --- damage ---------------------------------------------------------------------------
 func take_damage(amount: int) -> void:
@@ -538,6 +548,9 @@ func _fit_model(model: Node3D, target: float) -> void:
 		-(b.position.x + b.size.x * 0.5) * s,
 		-b.position.y * s,
 		-(b.position.z + b.size.z * 0.5) * s)
+	_fit_w = b.size.x * s     # record the fitted footprint + height so the collider can match it
+	_fit_h = b.size.y * s
+	_fit_d = b.size.z * s
 
 func _merged_local_aabb(root: Node3D) -> AABB:
 	var result := AABB()

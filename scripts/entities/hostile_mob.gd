@@ -22,6 +22,8 @@ const SIGHT_RANGE := 20.0
 const ATTACK_RANGE := 1.6
 const ATTACK_CD := 1.0
 const DAMAGE := 1
+const SEP_RADIUS := 2.0           # mobs closer than this push apart so the horde spreads, not stacks
+const SEP_PUSH := 3.6             # strong enough to compete with the chase pull and form a loose ring
 const BODY_H := 2.0              # the live code-built rig stands ~2.0 m (head box tops ~1.97) — a touch over the 1.8 m player
 const ZOMBIE_HEIGHT := 2.0       # rest-fit target for the UNUSED GLB fallback (_fit_skinned); the rig is the live visual
 const HUNCH := -0.18              # permanent forward lean (rad) — a shambling, lunging posture
@@ -67,6 +69,8 @@ var day_night                           # DayNight ref (siege mobs only) — the
 var _size := 1.0                        # body scale (brutes are larger)
 var _speed_mul := 1.0                   # per-type chase speed multiplier (brute slow, runner fast)
 var _knockback := Vector3.ZERO          # decaying shove from a player hit
+var _sep := Vector3.ZERO                # steer-apart from nearby mobs (recomputed on a throttle)
+var _sep_t := 0.0
 var _burning := false                   # caught in daylight: smoking, ticking damage, about to drop
 var _burn_t := 0.0
 var _burn_dmg_t := 0.0
@@ -569,9 +573,15 @@ func _physics_process(delta: float) -> void:
 			if chasing and player and is_instance_valid(player):
 				py_above = float(player.global_position.y) - global_position.y
 			velocity.y = 6.6 if py_above > 1.2 else 4.5
+	# Steer apart from nearby mobs (throttled) so the horde fans out around the player and
+	# shambles past each other instead of piling into one jittering stack on the same spot.
+	_sep_t -= delta
+	if _sep_t <= 0.0:
+		_sep_t = 0.2
+		_compute_separation()
 	var spd := (CHASE_SPEED if chasing else SPEED) * _speed_mul   # brutes slow, runners fast
-	velocity.x = _dir.x * spd + _knockback.x
-	velocity.z = _dir.z * spd + _knockback.z
+	velocity.x = _dir.x * spd + _knockback.x + _sep.x
+	velocity.z = _dir.z * spd + _knockback.z + _sep.z
 	_knockback = _knockback.lerp(Vector3.ZERO, delta * 8.0)   # shove decays fast
 
 	if _dir.length() > 0.1:
@@ -582,6 +592,26 @@ func _physics_process(delta: float) -> void:
 
 	if global_position.y < -20.0:
 		queue_free()
+
+## Accumulate a push away from up to a few nearby mobs (zombies + fauna share the "mob" group),
+## so a converging horde spreads into a loose ring instead of stacking on one point. Throttled
+## (every 0.2 s) and capped at 6 neighbours, so it's cheap even on a full blood-moon siege.
+func _compute_separation() -> void:
+	_sep = Vector3.ZERO
+	var count := 0
+	for m in get_tree().get_nodes_in_group("mob"):
+		if m == self or not is_instance_valid(m):
+			continue
+		var d: Vector3 = global_position - (m as Node3D).global_position
+		d.y = 0.0
+		var dist := d.length()
+		if dist > 0.05 and dist < SEP_RADIUS:
+			_sep += d / dist * (SEP_RADIUS - dist)   # closer neighbours push harder
+			count += 1
+			if count >= 6:
+				break
+	if _sep.length() > 0.001:
+		_sep = _sep.normalized() * SEP_PUSH
 
 func _pick_dir() -> void:
 	_timer = _rng.randf_range(1.5, 4.0)

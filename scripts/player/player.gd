@@ -257,7 +257,7 @@ func _give_starter_kit() -> void:
 var body_meshes: Array = []   # the player's body meshes (hidden in first person)
 var _viewmodel: Node3D        # held tool shown in front of the camera in first person
 const VM_REST_POS := Vector3(0.3, -0.32, -0.62)   # viewmodel resting offset from camera
-const VM_REST_ROT := Vector3(8, 90, -45)          # yaw faces the pick head toward the crosshair; -45 roll counters the baked tilt
+const VM_REST_ROT := Vector3(18, 90, -100)         # head angled down so the pick point bites toward the ground/blocks
 var _vm_phase := 0.0          # bob/sway phase
 var _vm_swing := 0.0          # 1->0 swing progress when mining/attacking
 var _vm_place := 0.0          # 1->0 forward "push" when placing a block
