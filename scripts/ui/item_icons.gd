@@ -28,6 +28,8 @@ static func _atlas_texture() -> Texture2D:
 ## fall back to a flat colour swatch).
 static func icon(id: int) -> Texture2D:
 	var ti := VoxelTypes.tile_index(id)
+	if ti < 0:
+		return null                      # no atlas tile -> caller falls back to a colour swatch
 	if _cache.has(ti):
 		return _cache[ti]
 	var atlas := _atlas_texture()
@@ -45,6 +47,8 @@ static func icon(id: int) -> Texture2D:
 ## (its region remap only applies in 2D), so a dropped block would show every tile at once.
 static func tile_texture(id: int) -> Texture2D:
 	var ti := VoxelTypes.tile_index(id)
+	if ti < 0:
+		return null                      # no atlas tile -> caller falls back to a flat colour
 	if _tiles.has(ti):
 		return _tiles[ti]
 	var atlas := _atlas_texture()

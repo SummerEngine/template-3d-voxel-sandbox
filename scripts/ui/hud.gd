@@ -25,6 +25,10 @@ var _slots: Array = []          # each: {panel, swatch, count}
 var _style_normal: StyleBoxFlat
 var _style_selected: StyleBoxFlat
 var _dmg_flash: ColorRect
+var _vignette: TextureRect       # sustained red edge-vignette that pulses when health is low
+var _low_active := false
+var _low_intensity := 0.0
+var _low_phase := 0.0
 var _death_dim: ColorRect
 var _death_title: Label
 var _death_sub: Label
@@ -50,6 +54,7 @@ func _ready() -> void:
 	_layout()
 
 func _process(delta: float) -> void:
+	_update_vignette(delta)
 	if _fps == null or not _fps.visible:
 		return
 	_fps_accum += delta
@@ -81,6 +86,28 @@ func _build() -> void:
 	_dmg_flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_dmg_flash.modulate = Color(1, 1, 1, 0.0)
 	add_child(_dmg_flash)
+
+	# Low-health vignette: a radial gradient that's clear in the centre and dark red at the
+	# edges, faded out by default and pulsed in (via _process) only when health is critical.
+	_vignette = TextureRect.new()
+	var grad := Gradient.new()
+	grad.set_offset(0, 0.42)
+	grad.set_color(0, Color(0.55, 0.0, 0.0, 0.0))   # centre: clear
+	grad.set_offset(1, 1.0)
+	grad.set_color(1, Color(0.45, 0.0, 0.0, 1.0))   # edges: red
+	var gtex := GradientTexture2D.new()
+	gtex.gradient = grad
+	gtex.fill = GradientTexture2D.FILL_RADIAL
+	gtex.fill_from = Vector2(0.5, 0.5)
+	gtex.fill_to = Vector2(0.5, 1.0)
+	gtex.width = 256
+	gtex.height = 256
+	_vignette.texture = gtex
+	_vignette.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_vignette.stretch_mode = TextureRect.STRETCH_SCALE
+	_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_vignette.modulate = Color(1, 1, 1, 0.0)
+	add_child(_vignette)
 
 	_cross = Label.new()
 	_cross.text = "+"
@@ -219,6 +246,9 @@ func _layout() -> void:
 	if _dmg_flash:
 		_dmg_flash.position = Vector2.ZERO
 		_dmg_flash.size = vp
+	if _vignette:
+		_vignette.position = Vector2.ZERO
+		_vignette.size = vp
 	_cross.position = Vector2(vp.x * 0.5 - 6, vp.y * 0.5 - 16)
 	_mine_bg.position = Vector2(vp.x * 0.5 - 32, vp.y * 0.5 + 16)
 	_mine_fill.position = _mine_bg.position
@@ -282,12 +312,28 @@ func flash_damage() -> void:
 	var tw := create_tween()
 	tw.tween_property(_dmg_flash, "modulate:a", 0.0, 0.4)
 
+## Pulse the low-health vignette in (and out) every frame. Lives outside the FPS-overlay gate
+## so it runs whether or not F3 is up.
+func _update_vignette(delta: float) -> void:
+	if _vignette == null:
+		return
+	var target := 0.0
+	if _low_active:
+		_low_phase += delta * 3.2
+		target = _low_intensity * (0.45 + 0.55 * absf(sin(_low_phase)))   # breathe between dim and full
+	_vignette.modulate.a = move_toward(_vignette.modulate.a, target, delta * 2.2)
+
 func set_health(h: int, max_h: int) -> void:
 	if _hearts == null: return
 	var s := ""
 	for i in range(max_h):
 		s += "♥" if i < h else "♡"
 	_hearts.text = s
+	# Critical-health warning: vignette kicks in at the bottom third of health and deepens as it
+	# drops. Off entirely at 0 (the death screen takes over from there).
+	var frac := float(h) / float(maxi(1, max_h))
+	_low_active = h > 0 and frac <= 0.34
+	_low_intensity = clampf((0.34 - frac) / 0.34, 0.0, 1.0) * 0.6
 
 func set_hunger(h: int, max_h: int) -> void:
 	if _hunger == null: return

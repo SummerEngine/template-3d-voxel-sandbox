@@ -152,6 +152,13 @@ func _ready() -> void:
 	structures.setup(world, player)
 	add_child(structures)
 
+	# Farming: tilled soil + growing crops the player plants and harvests.
+	var farm := preload("res://scripts/world/farm.gd").new()
+	farm.name = "FarmManager"
+	farm.setup(world, player)
+	add_child(farm)
+	player.farm = farm
+
 	# Apply saved player state after everything exists.
 	if not save.is_empty():
 		if save.has("player"):
@@ -163,6 +170,8 @@ func _ready() -> void:
 			day_night.time_of_day = float(save.time)
 		if save.has("weather") and save.weather is Dictionary and not save.weather.is_empty():
 			weather.load_state(save.weather)
+		if save.has("crops") and save.crops is Array:
+			farm.load_data(save.crops)
 
 	GameSettings.apply_gameplay(player, world)   # saved sensitivity + view distance
 

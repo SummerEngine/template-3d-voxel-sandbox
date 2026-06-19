@@ -51,6 +51,11 @@ const RAW_MEAT := 106
 const COOKED_MEAT := 107
 const TORCH := 108            # placeable light source (a prop + OmniLight, not a voxel)
 const ROTTEN_FLESH := 109     # zombie drop: edible but a weak, slightly grim food
+# --- farming ---
+const HOE := 110              # tool: right-click dirt/grass to till it into farmland
+const WHEAT_SEEDS := 111      # plant on farmland; drops from breaking grass
+const WHEAT := 112            # harvested from a ripe crop; cook/craft into bread
+const BREAD := 113            # cooked food (high hunger restore)
 
 # Extra atlas tiles that aren't a block's main face: item icons (28-35) and the log
 # ring-top (36). Tile index = row*8 + col in the 8x8 atlas.
@@ -112,6 +117,7 @@ static func tile_index(id: int) -> int:
 		COOKED_MEAT: return 35
 		ROTTEN_FLESH: return 34
 		TORCH:       return 26            # reuse the fiery lava tile as the torch icon
+		HOE, WHEAT_SEEDS, WHEAT, BREAD: return -1   # no atlas tile -> UI uses the colour swatch
 		_:           return atlas_index(id)
 
 static func is_solid(t: int) -> bool:
@@ -203,6 +209,10 @@ static func name_of(id: int) -> String:
 		COOKED_MEAT: return "Cooked Steak"
 		ROTTEN_FLESH: return "Rotten Flesh"
 		TORCH:       return "Torch"
+		HOE:         return "Hoe"
+		WHEAT_SEEDS: return "Wheat Seeds"
+		WHEAT:       return "Wheat"
+		BREAD:       return "Bread"
 		_:           return "?"
 
 ## Hunger restored when this item is eaten (0 = not food). Cooking roughly triples the
@@ -213,6 +223,7 @@ static func food_value(id: int) -> int:
 		RAW_MEAT:    return 2
 		COOKED_MEAT: return 6
 		ROTTEN_FLESH: return 2
+		BREAD:       return 5
 		_:           return 0
 
 ## Approximate solid colour for drops, break particles and hotbar swatches.
@@ -256,4 +267,8 @@ static func color_of(id: int) -> Color:
 		COOKED_MEAT: return Color(0.48, 0.26, 0.15)
 		ROTTEN_FLESH: return Color(0.40, 0.46, 0.28)
 		TORCH:       return Color(1.0, 0.6, 0.2)
+		HOE:         return Color(0.62, 0.47, 0.30)
+		WHEAT_SEEDS: return Color(0.80, 0.74, 0.45)
+		WHEAT:       return Color(0.88, 0.73, 0.28)
+		BREAD:       return Color(0.72, 0.48, 0.24)
 		_:           return Color(1, 0, 1)

@@ -21,6 +21,7 @@ var player                             # Player — so dropped food can be colle
 var health := 4
 var _dir := Vector3.ZERO
 var _timer := 0.0
+var _avoid_t := 0.0                     # throttles the terrain-avoidance world query (~4/sec)
 var _flee := 0.0
 var _pending_color := Color(0.95, 0.92, 0.86)
 var _rng := RandomNumberGenerator.new()
@@ -153,11 +154,14 @@ func _drop_food() -> void:
 
 func _physics_process(delta: float) -> void:
 	_timer -= delta
+	_avoid_t -= delta
 	if _flee > 0.0:
 		_flee -= delta
 	elif _timer <= 0.0:
 		_pick_dir()
-	_avoid_hazards()
+	if _avoid_t <= 0.0:                  # terrain query is a noise lookup — throttle it (was every frame)
+		_avoid_t = 0.25
+		_avoid_hazards()
 
 	if not is_on_floor():
 		velocity.y -= gravity * delta

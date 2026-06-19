@@ -60,6 +60,7 @@ var _noise := FastNoiseLite.new()
 var weather := Weather.CLEAR
 var _intensity := 0.0                   # precipitation / sandstorm strength (0..1)
 var _sheltered := false                 # true when the player has blocks overhead (cave / roof)
+var _desert := false                    # cached: is the player over desert (throttled noise query)
 var _clim_t := 0.0                       # throttle: recompute biome/shelter a few times a second
 
 # visuals
@@ -243,6 +244,7 @@ func _process(delta: float) -> void:
 		if _tsu == Tsu.NONE:
 			_derive_weather()
 		_sheltered = _check_sheltered()
+		_desert = world.has_method("_is_desert") and world._is_desert(int(player.global_position.x), int(player.global_position.z))
 
 	_apply_visuals(delta)
 	_update_particles()
@@ -259,9 +261,7 @@ func _n01(v: float) -> float:
 ## Drift the four climate scalars toward noise-driven targets (smooth, gradual).
 func _advance_climate(delta: float) -> void:
 	_clock += delta
-	var px := int(player.global_position.x)
-	var pz := int(player.global_position.z)
-	var desert: bool = world.has_method("_is_desert") and world._is_desert(px, pz)
+	var desert: bool = _desert        # cached + refreshed in the throttled climate block (was a per-frame noise query)
 
 	var nc := _n01(_noise.get_noise_1d(_clock * 2.0))
 	var nw := _n01(_noise.get_noise_1d(_clock * 2.0 + 4000.0))

@@ -53,6 +53,7 @@ static func save(world, player, day_night, weather = null) -> bool:
 		"inventory": player.inventory.to_data(),
 		"chests": _chests_data(world),
 		"weather": weather.save_state() if weather else {},
+		"crops": player.farm.to_data() if player.farm != null else [],
 	}
 	var f := FileAccess.open(PATH, FileAccess.WRITE)
 	if f == null:

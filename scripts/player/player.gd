@@ -64,6 +64,7 @@ const REGEN_BLOCK_TIME := 5.0     # no passive heal for this long after taking a
 
 var hud
 var world_manager
+var farm                          # FarmManager (planting / harvesting crops); set by main.gd
 
 var yaw_pivot: Node3D
 var pitch_pivot: Node3D
@@ -257,7 +258,7 @@ func _give_starter_kit() -> void:
 var body_meshes: Array = []   # the player's body meshes (hidden in first person)
 var _viewmodel: Node3D        # held tool shown in front of the camera in first person
 const VM_REST_POS := Vector3(0.3, -0.32, -0.62)   # viewmodel resting offset from camera
-const VM_REST_ROT := Vector3(18, 90, -100)         # head angled down so the pick point bites toward the ground/blocks
+const VM_REST_ROT := Vector3(8, 90, -45)          # yaw faces the pick head toward the crosshair; -45 roll counters the baked tilt
 var _vm_phase := 0.0          # bob/sway phase
 var _vm_swing := 0.0          # 1->0 swing progress when mining/attacking
 var _vm_place := 0.0          # 1->0 forward "push" when placing a block
@@ -941,6 +942,8 @@ func _physics_process(delta: float) -> void:
 					handled = true
 					if not _rmb_down:
 						_interact_station(tid, tcell)
+				elif not _rmb_down and _try_farm(tcell, tid):
+					handled = true                # tilled / planted / harvested on this press
 			if not handled:
 				_try_place()
 			_rmb_down = true
@@ -972,6 +975,45 @@ func _interact_station(tid: int, cell: Vector3i) -> void:
 			get_tree().call_group("crafting_ui", "open_for", "furnace")
 		VoxelTypes.CHEST:
 			get_tree().call_group("chest_ui", "open_chest", cell)
+
+## Right-click farming on the block being looked at (`tid` at `tcell`). Returns true if it
+## tilled soil, planted a seed, or harvested a ripe crop — so the caller skips block placement.
+## Called once per RMB press (the caller gates on _rmb_down).
+func _try_farm(tcell: Vector3i, tid: int) -> bool:
+	if farm == null or world_manager == null:
+		return false
+	var above := tcell + Vector3i(0, 1, 0)
+	var held := inventory.id_of(selected)
+	var held_n := inventory.count_of(selected)
+	# Hoe → till bare dirt/grass into farmland (only if the space above is clear).
+	if held == VoxelTypes.HOE and held_n > 0 and (tid == VoxelTypes.DIRT or tid == VoxelTypes.GRASS):
+		if world_manager.get_block(above.x, above.y, above.z) != VoxelTypes.AIR:
+			return false
+		world_manager.set_block(tcell.x, tcell.y, tcell.z, VoxelTypes.FARMLAND)
+		_play_snd(snd_place)
+		_emit_burst(Vector3(tcell) + Vector3(0.5, 1.0, 0.5), VoxelTypes.color_of(VoxelTypes.DIRT), 8, 0.4, 82.0, 0.8, 2.0, 5.0)
+		_vm_place = 1.0
+		return true
+	# Farmland → harvest a ripe crop, or plant seeds on bare tilled soil.
+	if tid == VoxelTypes.FARMLAND:
+		if farm.has_crop(above):
+			if farm.is_mature(above):
+				var got: Array = farm.harvest(above)
+				for i in range(int(got[0])):
+					_spawn_drop(above, VoxelTypes.WHEAT)
+				for i in range(int(got[1])):
+					_spawn_drop(above, VoxelTypes.WHEAT_SEEDS)
+				_play_snd(_break_sound_for(VoxelTypes.GRASS))
+				_emit_burst(Vector3(above) + Vector3(0.5, 0.4, 0.5), Color(0.95, 0.82, 0.35), 12, 0.5, 70.0, 1.2, 2.6, 7.0)
+			return true                       # a crop occupies the cell — never place a block here
+		if held == VoxelTypes.WHEAT_SEEDS and held_n > 0:
+			if world_manager.get_block(above.x, above.y, above.z) == VoxelTypes.AIR and not _cell_overlaps_player(above):
+				farm.plant(above)
+				inventory.remove_one(selected)
+				_play_snd(snd_place)
+				on_inventory_changed()
+				return true
+	return false
 
 func _update_footsteps(delta: float) -> void:
 	var horiz := Vector2(velocity.x, velocity.z).length()
@@ -1209,6 +1251,8 @@ func _break_block(cell: Vector3i, id: int) -> void:
 	add_trauma(0.1)                        # subtle pop when a block breaks
 	get_tree().call_group("ducker", "duck", 0.22, 0.35)
 	world_manager.set_block(cell.x, cell.y, cell.z, VoxelTypes.AIR)
+	if farm:
+		farm.on_block_removed(cell)        # clear a crop sitting here / above broken farmland
 	# Tier gate: too weak a pickaxe still breaks the block but yields no drop.
 	if VoxelTypes.mine_tier(id) > _pickaxe_tier():
 		if hud and hud.has_method("flash_tool_weak"):
@@ -1226,6 +1270,8 @@ func _break_block(cell: Vector3i, id: int) -> void:
 		_spawn_drop(cell, drop)
 	if id == VoxelTypes.LEAVES and randf() < 0.2:
 		_spawn_drop(cell, VoxelTypes.APPLE)
+	if id == VoxelTypes.GRASS and randf() < 0.35:
+		_spawn_drop(cell, VoxelTypes.WHEAT_SEEDS)   # grass yields seeds to bootstrap farming
 	emit_signal("block_harvested", id)
 
 func _weapon_swing(dur: float) -> void:

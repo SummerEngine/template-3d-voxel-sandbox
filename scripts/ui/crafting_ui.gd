@@ -24,6 +24,8 @@ const RECIPES := [
 	{"cat": "Crafting", "in": [[VoxelTypes.STONE, 4]],       "out_id": VoxelTypes.STONE_BRICKS,   "out_n": 4},
 	{"cat": "Crafting", "in": [[VoxelTypes.COBBLESTONE, 4]], "out_id": VoxelTypes.BRICKS, "out_n": 4},
 	{"cat": "Crafting", "in": [[VoxelTypes.STONE, 1]],       "out_id": VoxelTypes.POLISHED_STONE, "out_n": 1},
+	{"cat": "Crafting", "in": [[VoxelTypes.PLANKS, 2], [VoxelTypes.STICK, 2]], "out_id": VoxelTypes.HOE,   "out_n": 1},
+	{"cat": "Crafting", "in": [[VoxelTypes.WHEAT, 3]],       "out_id": VoxelTypes.BREAD,  "out_n": 1},
 	{"cat": "Smelt",    "in": [[VoxelTypes.IRON_ORE, 1], [VoxelTypes.COAL, 1]], "out_id": VoxelTypes.IRON_INGOT, "out_n": 1},
 	{"cat": "Smelt",    "in": [[VoxelTypes.GOLD_ORE, 1], [VoxelTypes.COAL, 1]], "out_id": VoxelTypes.GOLD_INGOT, "out_n": 1},
 	{"cat": "Smelt",    "in": [[VoxelTypes.RAW_MEAT, 1], [VoxelTypes.COAL, 1]], "out_id": VoxelTypes.COOKED_MEAT, "out_n": 1},

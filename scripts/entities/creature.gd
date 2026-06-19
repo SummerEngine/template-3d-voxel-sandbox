@@ -45,6 +45,9 @@ var _avoid_t := 0.0                   # throttle terrain-avoidance world queries
 var _anim_player: AnimationPlayer     # the model's own AnimationPlayer, if it's a rigged model
 var _has_clip := false                # true -> a baked clip drives the body (skip procedural anim)
 var _flap := 0.5                      # bird flap intensity envelope: flap to climb, glide to dive
+var _wing_l: Node3D                    # voxel-bird wing pivots (flapped in _anim_air)
+var _wing_r: Node3D
+var _tail: Node3D                      # voxel-bird tail (steers like a rudder when banking)
 var _fit_w := 0.8                      # the fitted model's real dimensions (set by _fit_model)
 var _fit_h := 0.8
 var _fit_d := 0.8
@@ -165,6 +168,9 @@ func _setup_vfx() -> void:
 	_bubbles = p
 
 func _build_visual() -> void:
+	if _mode == AIR:
+		_build_bird_rig()        # voxel bird with real flapping wings (replaces the GLB for birds)
+		return
 	var path := String(cfg.get("model", ""))
 	var target_h := float(cfg.get("size", 0.9))
 	if path != "" and ResourceLoader.exists(path):
@@ -254,6 +260,67 @@ func _build_box_fallback(h: float) -> void:
 	_fit_w = h * 0.7     # fallback box dimensions, for the collider
 	_fit_h = h * 0.7
 	_fit_d = h
+
+## A blocky voxel bird — body + head + beak + tail and two flapping wings on shoulder pivots.
+## Coloured from cfg, faces -Z (the flight/look_at direction). Wings are animated in _anim_air.
+## Replaces the GLB for birds so they match the voxel art and actually flap.
+func _build_bird_rig() -> void:
+	var rig := Node3D.new()
+	rig.name = "BirdRig"
+	add_child(rig)
+	var col: Color = cfg.get("color", Color(0.6, 0.5, 0.4))
+	var wing_col := col.darkened(0.18)
+	var beak_col := Color(0.95, 0.7, 0.2)
+	_flash_meshes = []
+	_base_overrides = []
+	_bird_box(rig, Vector3(0.22, 0.20, 0.50), Vector3(0, 0, 0), col)              # body (length on Z)
+	_bird_box(rig, Vector3(0.22, 0.22, 0.22), Vector3(0, 0.06, -0.30), col)       # head (front -Z)
+	_bird_box(rig, Vector3(0.07, 0.07, 0.14), Vector3(0, 0.04, -0.46), beak_col)  # beak
+	_tail = _bird_box(rig, Vector3(0.20, 0.04, 0.22), Vector3(0, 0.02, 0.34), wing_col)
+	_tail.rotation.x = -0.25                                                      # tail fans up a touch
+	_bird_eye(rig, Vector3(-0.10, 0.10, -0.34))
+	_bird_eye(rig, Vector3(0.10, 0.10, -0.34))
+	# Wings: a pivot at each shoulder with a flat wide plank; _anim_air rotates the pivots to flap.
+	_wing_l = Node3D.new()
+	_wing_l.position = Vector3(-0.10, 0.07, 0.0)
+	rig.add_child(_wing_l)
+	_bird_box(_wing_l, Vector3(0.40, 0.04, 0.34), Vector3(-0.22, 0, 0.02), wing_col)
+	_wing_r = Node3D.new()
+	_wing_r.position = Vector3(0.10, 0.07, 0.0)
+	rig.add_child(_wing_r)
+	_bird_box(_wing_r, Vector3(0.40, 0.04, 0.34), Vector3(0.22, 0, 0.02), wing_col)
+	var sz := float(cfg.get("size", 0.6))
+	rig.scale = Vector3.ONE * (sz / 0.9)   # natural wingspan ~0.9 m; scale to the species size
+	_model = rig
+	_rest_y = 0.0
+	_fit_w = 1.0 * (sz / 0.9)               # collider sized to the rig
+	_fit_h = 0.3 * (sz / 0.9)
+	_fit_d = 0.7 * (sz / 0.9)
+
+func _bird_box(parent: Node3D, size: Vector3, pos: Vector3, color: Color) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = size
+	mi.mesh = bm
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mi.material_override = mat
+	mi.position = pos
+	parent.add_child(mi)
+	_flash_meshes.append(mi)
+	_base_overrides.append(mat)
+	return mi
+
+func _bird_eye(parent: Node3D, pos: Vector3) -> void:
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(0.05, 0.05, 0.04)
+	mi.mesh = bm
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.05, 0.05, 0.05)
+	mi.material_override = mat
+	mi.position = pos
+	parent.add_child(mi)        # eyes stay dark (not in _flash_meshes)
 
 # --- damage ---------------------------------------------------------------------------
 func take_damage(amount: int) -> void:
@@ -473,12 +540,21 @@ func _anim_air(delta: float, vy: float) -> void:
 	_flap = lerpf(_flap, flap_target, delta * 3.0)
 	_phase += delta * (9.0 + _flap * 7.0)
 	var beat := sin(_phase)
-	_model.position.y = _rest_y + beat * 0.13 * _flap          # body lifts on the downstroke
+	_model.position.y = _rest_y + beat * 0.10 * _flap          # body lifts on the downstroke
 	var turn := wrapf(rotation.y - _last_yaw, -PI, PI)
 	_last_yaw = rotation.y
 	_bank = lerpf(_bank, clampf(turn * 7.0, -0.6, 0.6), delta * 5.0)
-	_model.rotation.z = _bank + beat * 0.22 * _flap            # wings rock with the beat + bank into turns
+	_model.rotation.z = _bank                                  # body banks into turns
 	_model.rotation.x = lerpf(_model.rotation.x, clampf(-vy * 0.14, -0.45, 0.45), delta * 4.0)  # nose up climbing
+	# Flap the actual wings: both sweep together around a resting dihedral. When gliding (low flap
+	# envelope) the wings hold a shallow upward V and barely move; when climbing they beat hard.
+	if _wing_l != null and _wing_r != null:
+		var stroke := beat * (0.35 + 0.70 * _flap)
+		var dihedral := lerpf(0.50, 0.12, _flap)   # glide → held up in a V; flapping → flatter
+		_wing_l.rotation.z = -(dihedral + stroke)
+		_wing_r.rotation.z =  (dihedral + stroke)
+	if _tail != null:
+		_tail.rotation.y = _bank * 0.6             # tail swings with the bank like a rudder
 
 # --- WATER ----------------------------------------------------------------------------
 func _move_water(delta: float) -> void:
