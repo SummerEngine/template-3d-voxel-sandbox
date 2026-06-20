@@ -22,6 +22,7 @@ var health := 4
 var _dir := Vector3.ZERO
 var _timer := 0.0
 var _avoid_t := 0.0                     # throttles the terrain-avoidance world query (~4/sec)
+var _amb_t := 8.0                       # countdown to the next ambient low/bleat/oink call
 var _flee := 0.0
 var _pending_color := Color(0.95, 0.92, 0.86)
 var _rng := RandomNumberGenerator.new()
@@ -29,6 +30,11 @@ var _flash_meshes: Array = []
 var _model: Node3D                     # the visual root, bobbed/waddled while walking
 var _model_rest_y := 0.0               # its resting local height (feet on the ground)
 var _walk_phase := 0.0                 # advancing stride phase, scaled by movement speed
+var _col: CollisionShape3D             # disabled on death so the corpse doesn't block
+var _dying := false                    # frozen while the death topple plays
+var _voice_path := "res://assets/audio/sfx/fauna/moo.mp3"   # species call, set when the model is picked
+var _voice_pitch := 1.0                # per-animal register so they don't all sound identical
+var _snd: AudioStreamPlayer3D          # plays the species call on hurt + (lower) on death
 
 func set_color(c: Color) -> void:
 	_pending_color = c
@@ -36,19 +42,48 @@ func set_color(c: Color) -> void:
 func _ready() -> void:
 	add_to_group("mob")
 	_rng.randomize()
+	_voice_pitch = _rng.randf_range(0.9, 1.15)
+	_amb_t = _rng.randf_range(6.0, 12.0)   # stagger first ambient call so a herd doesn't moo in unison
 
-	var col := CollisionShape3D.new()
+	_col = CollisionShape3D.new()
 	var box := BoxShape3D.new()
 	box.size = Vector3(0.8, 0.8, 1.1)
-	col.shape = box
-	col.position = Vector3(0, 0.45, 0)
-	add_child(col)
+	_col.shape = box
+	_col.position = Vector3(0, 0.45, 0)
+	add_child(_col)
 
 	_build_visual()
+	_snd = _make_snd3d(_voice_path, -4.0)   # _voice_path was set to match the picked species
 	_pick_dir()
+
+## A positional one-shot voice (cow/pig/sheep call), attenuating with distance like the mobs.
+func _make_snd3d(path: String, vol_db: float) -> AudioStreamPlayer3D:
+	var p := AudioStreamPlayer3D.new()
+	if ResourceLoader.exists(path):
+		p.stream = load(path)
+	p.volume_db = vol_db
+	p.unit_size = 8.0
+	p.max_distance = 35.0
+	if AudioServer.get_bus_index("SFX") != -1:
+		p.bus = "SFX"
+	add_child(p)
+	return p
+
+func _play_voice(pitch_mul: float) -> void:
+	if _snd and _snd.stream:
+		_snd.pitch_scale = _voice_pitch * pitch_mul * _rng.randf_range(0.96, 1.04)
+		_snd.play()
+
+func _voice_for(model_path: String) -> String:
+	if "pig" in model_path:
+		return "res://assets/audio/sfx/fauna/oink.mp3"
+	if "sheep" in model_path:
+		return "res://assets/audio/sfx/fauna/baa.mp3"
+	return "res://assets/audio/sfx/fauna/moo.mp3"
 
 func _build_visual() -> void:
 	var path: String = MODELS[_rng.randi() % MODELS.size()]
+	_voice_path = _voice_for(path)
 	if ResourceLoader.exists(path):
 		var packed := load(path) as PackedScene
 		if packed:
@@ -80,15 +115,24 @@ func _build_box_fallback() -> void:
 	add_child(head)
 	_flash_meshes = [body, head]
 
+## One shared white-emissive flash material for ALL animals — its properties never vary, so
+## there's no need to allocate a fresh StandardMaterial3D on every hit.
+static var _FLASH_MAT: StandardMaterial3D
+static func _flash_mat() -> StandardMaterial3D:
+	if _FLASH_MAT == null:
+		var m := StandardMaterial3D.new()
+		m.albedo_color = Color(1, 1, 1)
+		m.emission_enabled = true
+		m.emission = Color(1, 1, 1)
+		m.emission_energy_multiplier = 2.0
+		_FLASH_MAT = m
+	return _FLASH_MAT
+
 ## White hit-flash when struck (briefly overrides the meshes' material).
 func flash() -> void:
 	if _flash_meshes.is_empty():
 		return
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(1, 1, 1)
-	mat.emission_enabled = true
-	mat.emission = Color(1, 1, 1)
-	mat.emission_energy_multiplier = 2.0
+	var mat := _flash_mat()
 	for m in _flash_meshes:
 		if is_instance_valid(m):
 			m.material_override = mat
@@ -132,14 +176,64 @@ func _merged_local_aabb(root: Node3D) -> AABB:
 	return result
 
 func take_damage(amount: int) -> void:
+	if _dying:
+		return                              # already toppling — ignore further hits
+	_play_voice(1.0)
+	flash()
 	health -= amount
 	if health <= 0:
-		_drop_food()
-		queue_free()
+		_die()
 		return
 	_flee = 1.2
 	var a := _rng.randf_range(0.0, TAU)
 	_dir = Vector3(cos(a), 0.0, sin(a))
+
+## Death: a beat of feedback so a kill reads (instead of the animal silently popping out of
+## existence) — a last lower call, a dust puff, a quick topple, then drop loot + despawn.
+func _die() -> void:
+	_dying = true
+	velocity = Vector3.ZERO
+	_play_voice(0.7)                        # a lower, dying call
+	_death_burst()
+	_drop_food()
+	if _col:
+		_col.set_deferred("disabled", true)
+	if _model and is_instance_valid(_model):
+		var tw := create_tween()
+		tw.tween_property(_model, "rotation:z", _model.rotation.z + deg_to_rad(90.0), 0.4) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.parallel().tween_property(_model, "position:y", _model_rest_y - 0.3, 0.4) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw.parallel().tween_property(_model, "scale", _model.scale * 0.7, 0.5).set_delay(0.1)
+		tw.tween_callback(queue_free)
+	else:
+		queue_free()
+
+## A soft tan dust puff at the kill, parented to the scene so it outlives the despawn.
+func _death_burst() -> void:
+	var parent := get_parent()
+	if parent == null:
+		return
+	var p := CPUParticles3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(0.10, 0.10, 0.10)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.86, 0.80, 0.70)
+	bm.material = mat
+	p.mesh = bm
+	p.amount = 14
+	p.one_shot = true
+	p.lifetime = 0.7
+	p.explosiveness = 0.95
+	p.direction = Vector3.UP
+	p.spread = 75.0
+	p.initial_velocity_min = 1.6
+	p.initial_velocity_max = 3.6
+	p.gravity = Vector3(0, -7.0, 0)
+	p.emitting = true
+	parent.add_child(p)
+	p.global_position = global_position + Vector3(0, 0.5, 0)
+	p.finished.connect(p.queue_free)
 
 ## Drops raw meat on death so the player can hunt, then cook it in a furnace for far
 ## more hunger than eating it raw.
@@ -153,8 +247,17 @@ func _drop_food() -> void:
 		drop.global_position = global_position + Vector3(_rng.randf_range(-0.3, 0.3), 0.6, _rng.randf_range(-0.3, 0.3))
 
 func _physics_process(delta: float) -> void:
+	if _dying:
+		return                              # frozen while the death topple tween plays
 	_timer -= delta
 	_avoid_t -= delta
+	_amb_t -= delta
+	if _amb_t <= 0.0:                        # occasional ambient call, like the biome fauna do
+		_amb_t = _rng.randf_range(8.0, 16.0)
+		if _snd and _snd.stream and not _snd.playing \
+				and player and is_instance_valid(player) \
+				and global_position.distance_to(player.global_position) < 36.0:
+			_play_voice(0.9)                # gentle low / bleat / oink (not the hurt pitch)
 	if _flee > 0.0:
 		_flee -= delta
 	elif _timer <= 0.0:

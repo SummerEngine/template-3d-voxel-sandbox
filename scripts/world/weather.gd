@@ -10,8 +10,8 @@ extends Node
 ## The visible weather (clear / partly cloudy / overcast / rain / thunderstorm / snow) is
 ## DERIVED from these every frame, so days drift naturally — a bright clear morning can
 ## cloud over into an overcast afternoon and break into rain or snow. Deserts get sandstorms
-## (dry + windy); coasts get the occasional tsunami. Drives the sky's cloud layer, sun
-## dimming, fog, screen tint, particles, audio beds and hazards. Runs after DayNight.
+## (dry + windy). Drives the sky's cloud layer, sun
+## dimming, fog, screen tint, particles and audio beds. Runs after DayNight.
 
 enum Season { SPRING, SUMMER, AUTUMN, WINTER }
 const SEASON_NAMES := ["Spring", "Summer", "Autumn", "Winter"]
@@ -21,21 +21,8 @@ const SEASON_CLOUD := [0.05, -0.06, 0.10, 0.18]         # cloud bias per season
 const SEASON_WET := [0.06, -0.02, 0.10, 0.12]           # humidity bias per season
 const SEASON_TEMP := [0.52, 0.84, 0.44, 0.18]           # temperature baseline (<0.34 = snow)
 
-enum Weather { CLEAR, RAIN, STORM, SANDSTORM, SNOW, TSUNAMI }
-const BASE_FOG := 0.03
-
-# tsunami phases
-enum Tsu { NONE, WARN, RUN }
-const TSU_WARN_TIME := 5.0
-const TSU_SPEED := 9.0
-const TSU_SPAWN_DIST := 48.0
-const TSU_RUN_DIST := 110.0
-const TSU_THICK := 7.0
-const TSU_WIDTH := 90.0
-const TSU_HEIGHT := 11.0
-const TSU_PUSH := 14.0
-const TSU_COOLDOWN := 150.0
-const TSU_ROLL := 55.0                 # seconds between coast tsunami checks
+enum Weather { CLEAR, RAIN, STORM, SANDSTORM, SNOW }
+const BASE_FOG := 0.02         # clear-air baseline fog; lower = the horizon reads farther out
 
 var player
 var world
@@ -74,25 +61,12 @@ var _snow: GPUParticles3D
 var _sand: GPUParticles3D
 var _thunder_t := 0.0
 
-# audio (one looping bed, fade-swapped on change; plus thunder/siren one-shots)
+# audio (one looping bed, fade-swapped on change; plus thunder one-shots)
 var _bed: AudioStreamPlayer
 var _bed_path_cur := ""
 var _bed_db := -40.0
 var _bed_target_db := -40.0
 var _snd_thunder: AudioStreamPlayer
-var _snd_siren: AudioStreamPlayer
-
-# tsunami
-var _tsu := Tsu.NONE
-var _tsu_t := 0.0
-var _tsu_cd := 25.0
-var _tsu_roll := TSU_ROLL
-var _tsu_dir := Vector3.FORWARD
-var _tsu_dist := 0.0
-var _tsu_origin := Vector3.ZERO
-var _wave: MeshInstance3D
-var _drown_t := 0.0
-var _drown_acc := 0.0
 
 func setup(p, w, env: Environment, sun: DirectionalLight3D, sky: ShaderMaterial, h, dn) -> void:
 	player = p
@@ -202,7 +176,6 @@ func _build_audio() -> void:
 		_bed.bus = "Ambient"
 	add_child(_bed)
 	_snd_thunder = _oneshot("res://assets/audio/weather/thunder.mp3", -3.0, "SFX")
-	_snd_siren = _oneshot("res://assets/audio/weather/tsunami_warning.mp3", -4.0, "SFX")
 
 func _oneshot(path: String, db: float, bus: String) -> AudioStreamPlayer:
 	var p := AudioStreamPlayer.new()
@@ -227,13 +200,6 @@ func _process(delta: float) -> void:
 			hud.show_toast("%s has arrived" % SEASON_NAMES[season], Color(0.8, 0.9, 1.0))
 
 	_advance_climate(delta)
-	if _tsu == Tsu.NONE:
-		_tsu_roll -= delta
-		if _tsu_cd > 0.0:
-			_tsu_cd -= delta
-		if _tsu_roll <= 0.0:
-			_tsu_roll = TSU_ROLL
-			_maybe_tsunami()
 
 	# The expensive world queries (biome_at -> surface_height, and the overhead block scan)
 	# don't need to run every frame — weather and cover change slowly. Recompute a few times
@@ -241,16 +207,13 @@ func _process(delta: float) -> void:
 	_clim_t -= delta
 	if _clim_t <= 0.0:
 		_clim_t = 0.3
-		if _tsu == Tsu.NONE:
-			_derive_weather()
+		_derive_weather()
 		_sheltered = _check_sheltered()
 		_desert = world.has_method("_is_desert") and world._is_desert(int(player.global_position.x), int(player.global_position.z))
 
 	_apply_visuals(delta)
 	_update_particles()
-	if _tsu != Tsu.NONE:
-		_update_tsunami(delta)
-	elif weather == Weather.STORM and _intensity > 0.4:
+	if weather == Weather.STORM and _intensity > 0.4:
 		_update_lightning(delta)
 	_update_audio(delta)
 	_apply_label()
@@ -313,27 +276,6 @@ func _derive_weather() -> void:
 		weather = Weather.CLEAR
 		_intensity = 0.0
 
-func _maybe_tsunami() -> void:
-	if _tsu_cd > 0.0:
-		return
-	var px := int(player.global_position.x)
-	var pz := int(player.global_position.z)
-	if _near_ocean(px, pz) and randf() < 0.3:
-		_begin_tsunami()
-
-func _near_ocean(px: int, pz: int) -> bool:
-	if player.global_position.y > float(world.SEA_LEVEL + 12):
-		return false
-	var water := 0
-	for a in range(8):
-		var ang := float(a) * PI / 4.0
-		for d in [10, 18, 26]:
-			var sx := px + int(cos(ang) * float(d))
-			var sz := pz + int(sin(ang) * float(d))
-			if world.surface_height(sx, sz) <= world.SEA_LEVEL:
-				water += 1
-	return water >= 6
-
 # --- visuals -------------------------------------------------------------------------
 func _apply_visuals(_delta: float) -> void:
 	_env.adjustment_enabled = true
@@ -366,16 +308,11 @@ func _apply_visuals(_delta: float) -> void:
 			fog += 0.045 * k
 			wcol = Color(0.82, 0.86, 0.95, 0.20 * k)
 			dim *= lerpf(1.0, 0.86, k)
-		Weather.TSUNAMI:
-			fog += 0.05
-			wcol = Color(0.10, 0.18, 0.28, 0.30 * k)
-			dim *= 0.6
-			wcol = wcol.lerp(Color(0.05, 0.18, 0.30, 0.74), _drown_t)
 		_:
 			# clear: a faint grey wash only when genuinely overcast
 			wcol = Color(0.55, 0.57, 0.62, clampf((_cloud - 0.55) * 0.5, 0.0, 0.16))
 	_env.fog_density = fog
-	if _sheltered and weather != Weather.TSUNAMI:
+	if _sheltered:
 		wcol.a *= 0.3                                   # weather barely shows through a roof
 	# Season tint sits under the weather tint (very subtle).
 	_season_rect.color = Color(0.7, 0.85, 1.0, 0.05) if season == Season.WINTER else \
@@ -427,8 +364,6 @@ func _apply_label() -> void:
 		_label.text = "%s  ·  %s" % [SEASON_NAMES[season], _condition_text()]
 
 func _condition_text() -> String:
-	if _tsu != Tsu.NONE:
-		return "Tsunami"
 	match weather:
 		Weather.SANDSTORM: return "Sandstorm"
 		Weather.SNOW:      return "Snow" if _intensity > 0.45 else "Light Snow"
@@ -443,114 +378,9 @@ func _condition_text() -> String:
 				return "Cloudy"
 			return "Overcast"
 
-# --- tsunami -------------------------------------------------------------------------
-func _begin_tsunami() -> void:
-	var px := int(player.global_position.x)
-	var pz := int(player.global_position.z)
-	_tsu_dir = _ocean_direction(px, pz)
-	_tsu = Tsu.WARN
-	_tsu_t = TSU_WARN_TIME
-	weather = Weather.TSUNAMI
-	_intensity = 1.0
-	_drown_t = 0.0
-	if _snd_siren and _snd_siren.stream:
-		_snd_siren.play()
-	if hud and hud.has_method("show_toast"):
-		hud.show_toast("TSUNAMI WARNING — run for high ground!", Color(1.0, 0.4, 0.3))
-
-func _ocean_direction(px: int, pz: int) -> Vector3:
-	var best := Vector3.ZERO
-	var best_score := -1.0
-	for a in range(16):
-		var ang := float(a) * PI / 8.0
-		var dirx := cos(ang)
-		var dirz := sin(ang)
-		var score := 0.0
-		for d in [8, 16, 24, 32]:
-			var sx := px + int(dirx * float(d))
-			var sz := pz + int(dirz * float(d))
-			if world.surface_height(sx, sz) <= world.SEA_LEVEL:
-				score += 1.0
-		if score > best_score:
-			best_score = score
-			best = Vector3(dirx, 0, dirz)
-	if best == Vector3.ZERO:
-		best = Vector3.FORWARD
-	return best.normalized()
-
-func _update_tsunami(delta: float) -> void:
-	if _tsu == Tsu.WARN:
-		_tsu_t -= delta
-		if _tsu_t <= 0.0:
-			_spawn_wave()
-		return
-
-	var travel := -_tsu_dir
-	_tsu_dist += TSU_SPEED * delta
-	var center: Vector3 = _tsu_origin + travel * _tsu_dist
-	if is_instance_valid(_wave):
-		_wave.global_position = Vector3(center.x, float(world.SEA_LEVEL) + TSU_HEIGHT * 0.4, center.z)
-		_wave.look_at(_wave.global_position + travel, Vector3.UP)
-
-	# Only sweep/drown the player if they're actually down in the floodwater — standing on a
-	# hill or tower above the waterline keeps you safe (no more drowning on dry high ground).
-	var water_y := float(world.SEA_LEVEL) + 3.0
-	var along: float = (player.global_position - center).dot(travel)
-	var caught: bool = along <= TSU_THICK * 0.5 + 2.0 and along >= -TSU_THICK * 0.5 - 12.0 \
-			and player.global_position.y < water_y
-	if caught:
-		_drown_t = minf(1.0, _drown_t + delta * 2.5)
-		player.push(travel * TSU_PUSH)
-		_drown_acc += delta
-		if _drown_acc >= 0.9:
-			_drown_acc = 0.0
-			if player.has_method("hurt"):
-				player.hurt(1)
-	else:
-		_drown_t = maxf(0.0, _drown_t - delta * 1.5)
-		_drown_acc = 0.0
-
-	if _tsu_dist >= TSU_RUN_DIST:
-		_end_tsunami()
-
-func _spawn_wave() -> void:
-	_tsu = Tsu.RUN
-	_tsu_dist = 0.0
-	_tsu_origin = player.global_position + _tsu_dir * TSU_SPAWN_DIST
-	_tsu_origin.y = float(world.SEA_LEVEL)
-	if _wave == null or not is_instance_valid(_wave):
-		_wave = MeshInstance3D.new()
-		var bm := BoxMesh.new()
-		bm.size = Vector3(TSU_WIDTH, TSU_HEIGHT * 2.0, TSU_THICK)
-		_wave.mesh = bm
-		var m := StandardMaterial3D.new()
-		m.albedo_color = Color(0.18, 0.42, 0.62, 0.72)
-		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		m.roughness = 0.2
-		m.emission_enabled = true
-		m.emission = Color(0.30, 0.55, 0.70)
-		m.emission_energy_multiplier = 0.3
-		_wave.mesh.material = m
-		add_child(_wave)
-	_wave.visible = true
-
-func _end_tsunami() -> void:
-	_tsu = Tsu.NONE
-	_tsu_cd = TSU_COOLDOWN
-	_drown_t = 0.0
-	if is_instance_valid(_wave):
-		_wave.queue_free()
-		_wave = null
-	weather = Weather.CLEAR
-	_intensity = 0.0
-	if hud and hud.has_method("show_toast"):
-		hud.show_toast("The water recedes.", Color(0.6, 0.8, 0.95))
-
 # --- audio ---------------------------------------------------------------------------
 ## Which looping ambience suits the current sky, and how loud it should be.
 func _desired_bed_path() -> String:
-	if _tsu != Tsu.NONE:
-		return "res://assets/audio/weather/tsunami.mp3"
 	match weather:
 		Weather.SANDSTORM: return "res://assets/audio/weather/sandstorm.mp3"
 		Weather.RAIN, Weather.STORM: return "res://assets/audio/weather/rain.mp3"
@@ -561,8 +391,6 @@ func _desired_bed_path() -> String:
 					else "res://assets/audio/weather/clear.mp3"
 
 func _desired_bed_db() -> float:
-	if _tsu != Tsu.NONE:
-		return lerpf(-6.0, -1.0, _drown_t)
 	match weather:
 		Weather.SANDSTORM: return lerpf(-20.0, -7.0, _intensity)
 		Weather.RAIN, Weather.STORM: return lerpf(-22.0, -9.0, _intensity)

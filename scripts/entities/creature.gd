@@ -41,6 +41,7 @@ var _rest_y := 0.0
 var _phase := 0.0
 var _bank := 0.0
 var _last_yaw := 0.0
+var _dead := false                    # set on the killing hit so loot/VFX never double-fire
 var _avoid_t := 0.0                   # throttle terrain-avoidance world queries (not every frame)
 var _anim_player: AnimationPlayer     # the model's own AnimationPlayer, if it's a rigged model
 var _has_clip := false                # true -> a baked clip drives the body (skip procedural anim)
@@ -297,35 +298,54 @@ func _build_bird_rig() -> void:
 	_fit_h = 0.3 * (sz / 0.9)
 	_fit_d = 0.7 * (sz / 0.9)
 
+# Birds are built from many small boxes; like the zombie rig, share one mesh per size and one
+# material per colour across ALL birds so a flock reuses a handful of resources, not hundreds.
+# The base colour lives on the SURFACE override slot, leaving material_override free for flash().
+static var _BIRD_MESH_CACHE: Dictionary = {}   # Vector3 size -> BoxMesh
+static var _BIRD_MAT_CACHE: Dictionary = {}    # Color -> StandardMaterial3D
+static var _BIRD_EYE_MAT: StandardMaterial3D
+
+static func _bird_mesh(size: Vector3) -> BoxMesh:
+	if not _BIRD_MESH_CACHE.has(size):
+		var bm := BoxMesh.new()
+		bm.size = size
+		_BIRD_MESH_CACHE[size] = bm
+	return _BIRD_MESH_CACHE[size]
+
+static func _bird_mat(color: Color) -> StandardMaterial3D:
+	if not _BIRD_MAT_CACHE.has(color):
+		var m := StandardMaterial3D.new()
+		m.albedo_color = color
+		_BIRD_MAT_CACHE[color] = m
+	return _BIRD_MAT_CACHE[color]
+
 func _bird_box(parent: Node3D, size: Vector3, pos: Vector3, color: Color) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = size
-	mi.mesh = bm
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	mi.material_override = mat
+	mi.mesh = _bird_mesh(size)
+	mi.set_surface_override_material(0, _bird_mat(color))   # base colour on the surface slot
 	mi.position = pos
 	parent.add_child(mi)
 	_flash_meshes.append(mi)
-	_base_overrides.append(mat)
+	_base_overrides.append(null)        # flash() uses material_override; clearing it reveals the surface mat
 	return mi
 
 func _bird_eye(parent: Node3D, pos: Vector3) -> void:
+	if _BIRD_EYE_MAT == null:
+		_BIRD_EYE_MAT = StandardMaterial3D.new()
+		_BIRD_EYE_MAT.albedo_color = Color(0.05, 0.05, 0.05)
 	var mi := MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = Vector3(0.05, 0.05, 0.04)
-	mi.mesh = bm
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.05, 0.05, 0.05)
-	mi.material_override = mat
+	mi.mesh = _bird_mesh(Vector3(0.05, 0.05, 0.04))
+	mi.set_surface_override_material(0, _BIRD_EYE_MAT)
 	mi.position = pos
 	parent.add_child(mi)        # eyes stay dark (not in _flash_meshes)
 
 # --- damage ---------------------------------------------------------------------------
 func take_damage(amount: int) -> void:
+	if _dead:
+		return                        # already dead — don't drop loot / spawn the burst twice
 	health -= amount
 	if health <= 0:
+		_dead = true
 		if _mode == AIR:
 			_feather_burst()          # a puff of down where the bird drops
 		else:
@@ -365,14 +385,22 @@ func _feather_burst() -> void:
 	p.global_position = global_position + Vector3(0, 0.3, 0)
 	p.finished.connect(p.queue_free)
 
+## One shared white-emissive flash material for ALL creatures — constant, so no per-hit alloc.
+static var _FLASH_MAT: StandardMaterial3D
+static func _flash_mat() -> StandardMaterial3D:
+	if _FLASH_MAT == null:
+		var m := StandardMaterial3D.new()
+		m.albedo_color = Color(1, 1, 1)
+		m.emission_enabled = true
+		m.emission = Color(1, 1, 1)
+		m.emission_energy_multiplier = 2.0
+		_FLASH_MAT = m
+	return _FLASH_MAT
+
 func flash() -> void:
 	if _flash_meshes.is_empty():
 		return
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(1, 1, 1)
-	mat.emission_enabled = true
-	mat.emission = Color(1, 1, 1)
-	mat.emission_energy_multiplier = 2.0
+	var mat := _flash_mat()
 	for m in _flash_meshes:
 		if is_instance_valid(m):
 			m.material_override = mat

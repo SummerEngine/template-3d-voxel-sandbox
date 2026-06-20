@@ -29,6 +29,7 @@ func plant(cell: Vector3i, stage := 0, grow_t := 0.0) -> bool:
 	var c := CropScene.new()
 	c.stage = clampi(stage, 0, CropScene.STAGES - 1)
 	c.grow_t = grow_t
+	c.player = player                          # lets the crop skip sway when the player is far away
 	add_child(c)
 	c.global_position = Vector3(cell) + Vector3(0.5, 0.0, 0.5)
 	_crops[cell] = c

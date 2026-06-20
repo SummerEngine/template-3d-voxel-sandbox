@@ -346,15 +346,24 @@ func _merged_local_aabb(root: Node3D) -> AABB:
 				has = true
 	return result
 
+## One shared white-emissive flash material for ALL hostiles — constant properties, so a
+## blood-moon horde (or a burning mob flashing every 0.5s) doesn't churn identical materials.
+static var _FLASH_MAT: StandardMaterial3D
+static func _flash_mat() -> StandardMaterial3D:
+	if _FLASH_MAT == null:
+		var m := StandardMaterial3D.new()
+		m.albedo_color = Color(1, 1, 1)
+		m.emission_enabled = true
+		m.emission = Color(1, 1, 1)
+		m.emission_energy_multiplier = 2.0
+		_FLASH_MAT = m
+	return _FLASH_MAT
+
 ## White hit-flash when struck.
 func flash() -> void:
 	if _flash_meshes.is_empty():
 		return
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(1, 1, 1)
-	mat.emission_enabled = true
-	mat.emission = Color(1, 1, 1)
-	mat.emission_energy_multiplier = 2.0
+	var mat := _flash_mat()
 	for m in _flash_meshes:
 		if is_instance_valid(m):
 			m.material_override = mat
@@ -462,7 +471,10 @@ func apply_knockback(dir: Vector3, force: float) -> void:
 	if _dying:
 		return
 	var f := force * (0.2 if brute else 1.0)
-	_knockback = Vector3(dir.x, 0.0, dir.z).normalized() * f
+	var flat := Vector3(dir.x, 0.0, dir.z)
+	if flat.length() < 0.01:              # hit from directly above (same column): shove it back from its facing
+		flat = -global_transform.basis.z
+	_knockback = flat.normalized() * f
 
 func take_damage(amount: int) -> void:
 	if _dying:
@@ -478,6 +490,8 @@ func take_damage(amount: int) -> void:
 ## Death: stop the AI, drop the collider so the corpse doesn't block, and topple the body
 ## over (rotate down + sink + shrink) before despawning — a beat of feedback for the kill.
 func _die() -> void:
+	if _dying:
+		return                            # already dying — never topple/drop/emit twice
 	_dying = true
 	velocity = Vector3.ZERO
 	if _anim_player:
@@ -487,7 +501,9 @@ func _die() -> void:
 	if not _burning:
 		_drop_loot()                  # combat kills reward flesh; dawn-burned corpses don't litter
 	_death_burst()
-	if player and is_instance_valid(player) and player.has_signal("mob_killed"):
+	# Only a real combat kill counts toward the player's kill stat — a horde burning at dawn
+	# shouldn't credit the player with kills they never made.
+	if not _burning and player and is_instance_valid(player) and player.has_signal("mob_killed"):
 		player.emit_signal("mob_killed")
 	if _col:
 		_col.set_deferred("disabled", true)

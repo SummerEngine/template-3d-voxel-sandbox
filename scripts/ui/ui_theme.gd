@@ -17,6 +17,17 @@ static func panel_box() -> StyleBoxFlat:
 	s.content_margin_bottom = 18
 	return s
 
+## A consistent dark panel for the in-game content screens (crafting, chest, advancements), so
+## they read as one dialog system instead of three slightly-different boxes. Defined once here.
+static func dialog_box() -> StyleBoxFlat:
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.10, 0.11, 0.14, 0.97)
+	s.border_color = Color(0.55, 0.58, 0.66, 0.9)
+	s.set_border_width_all(3)
+	s.set_corner_radius_all(8)
+	s.set_content_margin_all(22)
+	return s
+
 static func _palette(kind: String) -> Array:
 	match kind:
 		"primary": return [Color(0.20, 0.58, 0.86), Color(0.60, 0.86, 1.0)]
@@ -53,6 +64,9 @@ static func make_button(text: String, kind: String = "normal", min_size := Vecto
 	b.add_theme_stylebox_override("normal", _btn_box(bg, border))
 	b.add_theme_stylebox_override("hover", _btn_box(bg.lightened(0.13), border))
 	b.add_theme_stylebox_override("pressed", _btn_box(bg.darkened(0.15), border))
+	# A muted disabled look so "Owned"/unaffordable buttons read as intentional, not unstyled.
+	b.add_theme_stylebox_override("disabled", _btn_box(bg.darkened(0.45), border.darkened(0.4)))
+	b.add_theme_color_override("font_disabled_color", Color(1, 1, 1, 0.5))
 	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	return b
 

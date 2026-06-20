@@ -56,8 +56,11 @@ func _try_place(gx: int, gz: int) -> bool:
 	if sy <= world.SEA_LEVEL + 1:
 		return false                              # not on water / beach
 	var chest_cell := Vector3i(ax, sy + 1, az)
-	if world.chests.has(chest_cell):
-		return false                              # already placed (chests persist in the save)
+	# Already placed if the chest BLOCK exists here — its override persists in the save even after
+	# the player loots the chest empty (an empty inventory is no longer written). Checking the dict
+	# alone would re-stamp + re-fill loot for looted-but-unbroken chests (infinite-resource exploit).
+	if world.get_block(chest_cell.x, chest_cell.y, chest_cell.z) == VoxelTypes.CHEST:
+		return false
 	var kind := int((h >> 16) % 3)                # 0 tower, 1 crypt, 2 cache
 	match kind:
 		0: _build_tower(ax, sy, az)

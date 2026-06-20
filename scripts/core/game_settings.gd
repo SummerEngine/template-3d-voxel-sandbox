@@ -13,7 +13,7 @@ static var master := 1.0
 static var music := 1.0
 static var sfx := 1.0
 static var sensitivity := 1.0      # multiplier on the player's base mouse sensitivity
-static var render_radius := 3      # chunks streamed around the player (2..8)
+static var render_radius := 4      # chunks streamed around the player (2..8)
 static var keybinds := {}          # action name -> physical keycode (overrides; see InputActions)
 static var _loaded := false
 

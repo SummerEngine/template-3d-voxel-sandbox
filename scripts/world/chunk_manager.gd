@@ -14,10 +14,12 @@ const WORLD_H := 256
 const SEA_LEVEL := 40          # water fills below this: oceans, lakes, rivers
 const MOUNTAIN_ROCK := 64      # bare-stone peaks at/above this height
 const SNOW_LEVEL := 82         # snow-capped peaks at/above this height
-const RENDER_RADIUS := 3       # default chunks around the player; render_radius (settings) overrides
+const RENDER_RADIUS := 4       # default chunks around the player; render_radius (settings) overrides
 var render_radius := RENDER_RADIUS
-const LOADS_PER_FRAME := 3     # async chunk builds dispatched per frame (they run in parallel)
-const APPLIES_PER_FRAME := 2   # finished chunk meshes applied to the scene per frame (smooths pop-in)
+const PRELOAD := 1             # extra ring(s) built BEYOND the visible radius, so the horizon is
+                              # already meshed before you reach it (no pop-in as you move)
+const LOADS_PER_FRAME := 6     # async chunk builds dispatched per frame (they run in parallel)
+const APPLIES_PER_FRAME := 3   # finished chunk meshes applied to the scene per frame (smooths pop-in)
 
 const CAVE_SQUASH := 1.4       # >1 flattens caves vertically
 const CAVE_THRESHOLD := 0.55   # carve where 3D cave noise exceeds this
@@ -313,7 +315,9 @@ func preload_around(center: Vector2i) -> void:
 		for dx in range(-1, 2):
 			_load(Vector2i(center.x + dx, center.y + dz), true)
 
-func _process(_delta: float) -> void:
+var _unload_t := 0.0   # accumulates between periodic unload sweeps
+
+func _process(delta: float) -> void:
 	if player == null:
 		return
 	_apply_budget = APPLIES_PER_FRAME   # reset each frame; chunks consume it as they finish (parent processes first)
@@ -322,6 +326,14 @@ func _process(_delta: float) -> void:
 		_center = pc
 		_refresh_queue(pc)
 		_unload_far(pc)
+	else:
+		# Periodic re-sweep: a far chunk that was still building when the player crossed a boundary
+		# is skipped (can't free mid-task); without this it would never be reclaimed if the player
+		# then stops moving. Cheap (a dict scan) and only frees once builds have finished.
+		_unload_t += delta
+		if _unload_t >= 1.0:
+			_unload_t = 0.0
+			_unload_far(_center)
 	var n := 0
 	while n < LOADS_PER_FRAME and not _queue.is_empty():
 		_load(_queue.pop_front())
@@ -349,9 +361,12 @@ func set_render_radius(r: int) -> void:
 	_center = Vector2i(999999, 999999)
 
 func _refresh_queue(center: Vector2i) -> void:
+	# Queue the visible radius PLUS a preload buffer beyond it, nearest-first — so the rings just
+	# past what you can see are already meshed before you move into them (kills horizon pop-in).
+	var load_r := render_radius + PRELOAD
 	var list: Array = []
-	for dz in range(-render_radius, render_radius + 1):
-		for dx in range(-render_radius, render_radius + 1):
+	for dz in range(-load_r, load_r + 1):
+		for dx in range(-load_r, load_r + 1):
 			var c := Vector2i(center.x + dx, center.y + dz)
 			if not chunks.has(c):
 				list.append(c)
@@ -359,9 +374,10 @@ func _refresh_queue(center: Vector2i) -> void:
 	_queue = list
 
 func _unload_far(center: Vector2i) -> void:
+	var keep := render_radius + PRELOAD + 1            # one ring of hysteresis past the preload buffer
 	var remove: Array = []
 	for c in chunks.keys():
-		if absi(c.x - center.x) > render_radius + 1 or absi(c.y - center.y) > render_radius + 1:
+		if absi(c.x - center.x) > keep or absi(c.y - center.y) > keep:
 			remove.append(c)
 	for c in remove:
 		if is_instance_valid(chunks[c]):

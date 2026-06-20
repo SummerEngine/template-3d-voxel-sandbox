@@ -12,8 +12,17 @@ static func has_save() -> bool:
 static func _chests_data(world) -> Array:
 	var out: Array = []
 	for cell in world.chests.keys():
-		out.append([cell.x, cell.y, cell.z, world.chests[cell].to_data()])
+		var inv = world.chests[cell]
+		if _inv_empty(inv):
+			continue                                # don't persist empty/ghost chests (they bloat the save)
+		out.append([cell.x, cell.y, cell.z, inv.to_data()])
 	return out
+
+static func _inv_empty(inv) -> bool:
+	for s in inv.slots:
+		if s.count > 0:
+			return false
+	return true
 
 ## Rebuilds the chests dictionary (Vector3i -> Inventory) from saved data.
 static func chests_from(data: Dictionary) -> Dictionary:
@@ -23,6 +32,21 @@ static func chests_from(data: Dictionary) -> Dictionary:
 		if e.size() >= 4 and e[3] is Array:
 			inv.from_data(e[3])
 		out[Vector3i(int(e[0]), int(e[1]), int(e[2]))] = inv
+	return out
+
+## Torches are placeable light props (not voxels), kept in chunk_manager.torches — persist
+## just their cells so they survive a save/load (otherwise the placed item is silently lost).
+static func _torches_data(world) -> Array:
+	var out: Array = []
+	for cell in world.torches.keys():
+		out.append([cell.x, cell.y, cell.z])
+	return out
+
+static func torches_from(data: Dictionary) -> Array:
+	var out: Array = []
+	for e in data.get("torches", []):
+		if e.size() >= 3:
+			out.append(Vector3i(int(e[0]), int(e[1]), int(e[2])))
 	return out
 
 static func _tool_names(player) -> Array:
@@ -52,6 +76,7 @@ static func save(world, player, day_night, weather = null) -> bool:
 		},
 		"inventory": player.inventory.to_data(),
 		"chests": _chests_data(world),
+		"torches": _torches_data(world),
 		"weather": weather.save_state() if weather else {},
 		"crops": player.farm.to_data() if player.farm != null else [],
 	}

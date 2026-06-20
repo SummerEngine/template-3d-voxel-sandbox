@@ -236,6 +236,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_close_settings()                    # first Esc backs out of the settings overlay
 		elif paused:
 			_resume()
+		elif player and player.has_method("is_dead") and player.is_dead():
+			pass                                     # dead: the death screen + R own the input, don't pause over it
 		else:
 			var c = get_tree().get_first_node_in_group("chest_ui")
 			if c and c.has_method("is_open") and c.is_open():

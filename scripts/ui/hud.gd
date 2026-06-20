@@ -19,9 +19,10 @@ var _hunger: Label
 var _tool: Label
 var _armor: Label
 var _block_name: Label
-var _hint: Label
+var _controls: PanelContainer
 var _hotbar: HBoxContainer
 var _slots: Array = []          # each: {panel, swatch, count}
+var _prev_counts: Array = []    # last-seen count per slot, to pulse a slot when it gains an item
 var _style_normal: StyleBoxFlat
 var _style_selected: StyleBoxFlat
 var _dmg_flash: ColorRect
@@ -75,9 +76,18 @@ func _build_styles() -> void:
 	_style_normal.set_border_width_all(2)
 	_style_normal.border_color = Color(0.7, 0.7, 0.7, 0.5)
 	_style_selected = StyleBoxFlat.new()
-	_style_selected.bg_color = Color(0, 0, 0, 0.45)
+	_style_selected.bg_color = Color(0, 0, 0, 0.5)
 	_style_selected.set_border_width_all(3)
-	_style_selected.border_color = Color(1, 1, 1, 0.95)
+	_style_selected.border_color = Color(1.0, 0.85, 0.42, 1.0)   # gold accent (matches the controls keys)
+	_style_selected.shadow_color = Color(1.0, 0.82, 0.35, 0.55)  # soft glow so the active slot pops
+	_style_selected.shadow_size = 5
+
+## A black outline behind a label so HUD text stays legible over bright sky, snow or lava
+## (the world behind the HUD is any colour). Returns the label for inline use.
+func _outline(l: Label, size: int = 4) -> Label:
+	l.add_theme_constant_override("outline_size", size)
+	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	return l
 
 func _build() -> void:
 	# Full-screen red damage flash (behind the HUD widgets, over the 3D world).
@@ -112,6 +122,7 @@ func _build() -> void:
 	_cross = Label.new()
 	_cross.text = "+"
 	_cross.add_theme_font_size_override("font_size", 22)
+	_outline(_cross, 3)
 	add_child(_cross)
 
 	_mine_bg = ColorRect.new()
@@ -129,27 +140,32 @@ func _build() -> void:
 	_hearts.add_theme_font_size_override("font_size", 24)
 	_hearts.position = Vector2(16, 12)
 	_hearts.modulate = Color(1.0, 0.27, 0.32)
+	_outline(_hearts)
 	add_child(_hearts)
 
 	_hunger = Label.new()
 	_hunger.add_theme_font_size_override("font_size", 24)
 	_hunger.position = Vector2(16, 44)
 	_hunger.modulate = Color(0.95, 0.65, 0.25)
+	_outline(_hunger)
 	add_child(_hunger)
 
 	_tool = Label.new()
 	_tool.position = Vector2(16, 78)
 	_tool.modulate = Color(0.85, 0.92, 1.0)
+	_outline(_tool)
 	add_child(_tool)
 
 	_armor = Label.new()
 	_armor.position = Vector2(16, 102)
 	_armor.modulate = Color(0.65, 0.85, 1.0)
+	_outline(_armor)
 	add_child(_armor)
 
 	_block_name = Label.new()
 	_block_name.add_theme_font_size_override("font_size", 18)
 	_block_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_outline(_block_name)
 	add_child(_block_name)
 
 	_hotbar = HBoxContainer.new()
@@ -173,20 +189,19 @@ func _build() -> void:
 		var count := Label.new()
 		count.add_theme_font_size_override("font_size", 14)
 		count.position = Vector2(SLOT - 20, SLOT - 22)
+		_outline(count, 3)
 		panel.add_child(count)
 		var key := Label.new()
 		key.text = str(i + 1)
 		key.add_theme_font_size_override("font_size", 11)
 		key.position = Vector2(4, 2)
 		key.modulate = Color(1, 1, 1, 0.5)
+		_outline(key, 2)
 		panel.add_child(key)
 		_hotbar.add_child(panel)
 		_slots.append({"panel": panel, "swatch": swatch, "icon": icon, "count": count})
 
-	_hint = Label.new()
-	_hint.text = "WASD move  Ctrl sprint  Space jump (x2 fly)  1-9/scroll hotbar  Q/E weapon  LMB mine/attack  RMB place  G eat  C craft  M map  J goals  F5 view  F3 stats  Esc pause"
-	_hint.modulate = Color(1, 1, 1, 0.65)
-	add_child(_hint)
+	_build_controls()
 
 	_build_death_screen()
 
@@ -195,6 +210,7 @@ func _build() -> void:
 	_toast.add_theme_font_size_override("font_size", 20)
 	_toast.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_toast.modulate = Color(1, 1, 1, 0)
+	_outline(_toast)
 	add_child(_toast)
 
 	# F3 debug overlay: live FPS + draw stats, top-right, hidden by default.
@@ -203,7 +219,74 @@ func _build() -> void:
 	_fps.modulate = Color(0.7, 1.0, 0.7)
 	_fps.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_fps.visible = false
+	_outline(_fps, 3)
 	add_child(_fps)
+
+## Controls reference at the top — one row per control, each as "control → action" with plain,
+## beginner-friendly labels ("Left click", not "LMB"). Two key→action columns keep it compact.
+func _build_controls() -> void:
+	const CONTROLS := [
+		["WASD", "Move"],
+		["Ctrl", "Sprint"],
+		["Space", "Jump  (double-tap to fly)"],
+		["Scroll / 1-9", "Select hotbar"],
+		["Q / E", "Switch weapon"],
+		["Left click", "Mine / attack"],
+		["Right click", "Place / use"],
+		["G", "Eat"],
+		["C", "Crafting"],
+		["M", "Map"],
+		["J", "Goals"],
+		["F5", "First / third person"],
+		["F3", "Stats"],
+		["Esc", "Pause"],
+	]
+	_controls = PanelContainer.new()
+	var box := StyleBoxFlat.new()
+	box.bg_color = Color(0, 0, 0, 0.34)
+	box.set_corner_radius_all(6)
+	box.set_content_margin_all(8)
+	_controls.add_theme_stylebox_override("panel", box)
+	_controls.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_controls)
+	var grid := GridContainer.new()
+	grid.columns = 4                                     # key, action, key, action — two columns of pairs
+	grid.add_theme_constant_override("h_separation", 14)
+	grid.add_theme_constant_override("v_separation", 3)
+	grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_controls.add_child(grid)
+	var half := int(ceil(CONTROLS.size() / 2.0))
+	for i in range(half):
+		_ctrl_row(grid, CONTROLS[i])
+		var j := i + half
+		if j < CONTROLS.size():
+			_ctrl_row(grid, CONTROLS[j])
+		else:
+			grid.add_child(_ctrl_cell("", true))
+			grid.add_child(_ctrl_cell("", false))
+	_controls.resized.connect(_center_controls)
+
+func _ctrl_row(grid: GridContainer, pair: Array) -> void:
+	grid.add_child(_ctrl_cell(String(pair[0]), true))    # the control (key) — accent colour
+	grid.add_child(_ctrl_cell(String(pair[1]), false))   # the action — white
+
+func _ctrl_cell(text: String, is_key: bool) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", 14)
+	l.add_theme_constant_override("outline_size", 3)
+	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.75))
+	l.add_theme_color_override("font_color", Color(1.0, 0.85, 0.42) if is_key else Color(0.95, 0.97, 1.0))
+	l.custom_minimum_size = Vector2(96.0 if is_key else 132.0, 0)
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return l
+
+## Keep the controls panel centred across the top, clear of the corner stats + minimap.
+func _center_controls() -> void:
+	if _controls == null:
+		return
+	var vp := get_viewport().get_visible_rect().size
+	_controls.position = Vector2((vp.x - _controls.size.x) * 0.5, 8)
 
 ## A dark-red full-screen overlay with "You Died" and a Respawn button. Hidden until
 ## the player calls show_death(); the button (or the R key) emits respawn_requested.
@@ -219,6 +302,7 @@ func _build_death_screen() -> void:
 	_death_title.add_theme_font_size_override("font_size", 64)
 	_death_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_death_title.modulate = Color(0.88, 0.16, 0.18)
+	_outline(_death_title, 6)
 	_death_title.visible = false
 	add_child(_death_title)
 
@@ -230,10 +314,8 @@ func _build_death_screen() -> void:
 	_death_sub.visible = false
 	add_child(_death_sub)
 
-	_respawn_btn = Button.new()
-	_respawn_btn.text = "Respawn"
-	_respawn_btn.add_theme_font_size_override("font_size", 24)
-	_respawn_btn.custom_minimum_size = Vector2(220, 56)
+	_respawn_btn = UITheme.make_button("Respawn", "primary", Vector2(220, 56))
+	_respawn_btn.focus_mode = Control.FOCUS_ALL   # make_button clears focus; we want R/Enter on it
 	_respawn_btn.visible = false
 	_respawn_btn.pressed.connect(func() -> void:
 		if _snd_click and _snd_click.stream:
@@ -256,7 +338,7 @@ func _layout() -> void:
 	_hotbar.position = Vector2(vp.x * 0.5 - total_w * 0.5, vp.y - SLOT - 16)
 	_block_name.position = Vector2(vp.x * 0.5 - 100, vp.y - SLOT - 44)
 	_block_name.size = Vector2(200, 20)
-	_hint.position = Vector2(16, vp.y - 26)
+	_center_controls()
 	if _fps:
 		_fps.size = Vector2(240, 40)
 		_fps.position = Vector2(vp.x - 256, 12)
@@ -358,6 +440,10 @@ func set_armor(armor_name: String) -> void:
 		_armor.text = ("Armor: %s" % armor_name) if armor_name != "" else ""
 
 func update_hotbar(slots: Array, selected: int) -> void:
+	var first := _prev_counts.is_empty()        # don't pulse every starting slot on the first fill
+	if first:
+		_prev_counts.resize(_slots.size())
+		_prev_counts.fill(0)
 	for i in range(_slots.size()):
 		var s = slots[i]
 		var ui = _slots[i]
@@ -365,12 +451,32 @@ func update_hotbar(slots: Array, selected: int) -> void:
 			var tex: Texture2D = ItemIcons.icon(s.id)
 			ui.icon.texture = tex
 			ui.swatch.color = Color(0, 0, 0, 0) if tex != null else VoxelTypes.color_of(s.id)
-			ui.count.text = str(s.count)
+			ui.count.text = str(s.count) if s.count > 1 else ""   # a stack of 1 needs no number
 		else:
 			ui.icon.texture = null
 			ui.swatch.color = Color(0, 0, 0, 0)
 			ui.count.text = ""
 		ui.panel.add_theme_stylebox_override("panel", _style_selected if i == selected else _style_normal)
+		if not first and s.count > _prev_counts[i]:   # gained an item here — quick pickup pulse
+			_pulse_slot(ui.panel)
+		_prev_counts[i] = s.count
 	var sel_id: int = slots[selected].id if selected >= 0 and selected < slots.size() else VoxelTypes.AIR
 	if _block_name:
 		_block_name.text = VoxelTypes.name_of(sel_id) if sel_id != VoxelTypes.AIR else ""
+
+## A brief warm brighten of a hotbar slot when its stack grows — the "+1" pickup pop. Modulate
+## only (not scale) so it never shifts the HBox layout.
+func _pulse_slot(panel: Panel) -> void:
+	if panel == null:
+		return
+	panel.modulate = Color(1.7, 1.7, 1.3)
+	var tw := create_tween()
+	tw.tween_property(panel, "modulate", Color(1, 1, 1, 1), 0.28)
+
+## Quick warm flash of the hunger bar when the player eats (eating feedback).
+func flash_hunger() -> void:
+	if _hunger == null:
+		return
+	_hunger.modulate = Color(1.6, 1.2, 0.5)
+	var tw := create_tween()
+	tw.tween_property(_hunger, "modulate", Color(0.95, 0.65, 0.25), 0.45)

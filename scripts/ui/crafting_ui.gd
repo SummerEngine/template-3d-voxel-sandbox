@@ -30,11 +30,11 @@ const RECIPES := [
 	{"cat": "Smelt",    "in": [[VoxelTypes.GOLD_ORE, 1], [VoxelTypes.COAL, 1]], "out_id": VoxelTypes.GOLD_INGOT, "out_n": 1},
 	{"cat": "Smelt",    "in": [[VoxelTypes.RAW_MEAT, 1], [VoxelTypes.COAL, 1]], "out_id": VoxelTypes.COOKED_MEAT, "out_n": 1},
 	# Tools (kind "tool" -> unlock + equip on the player). out_id = representative colour.
-	{"cat": "Tools", "kind": "tool", "tool": "Wooden Pickaxe",  "out_name": "Wooden Pickaxe",  "out_id": VoxelTypes.PLANKS,      "in": [[VoxelTypes.PLANKS, 3], [VoxelTypes.STICK, 2]]},
-	{"cat": "Tools", "kind": "tool", "tool": "Stone Pickaxe",   "out_name": "Stone Pickaxe",   "out_id": VoxelTypes.COBBLESTONE, "in": [[VoxelTypes.COBBLESTONE, 3], [VoxelTypes.STICK, 2]]},
-	{"cat": "Tools", "kind": "tool", "tool": "Iron Pickaxe",    "out_name": "Iron Pickaxe",    "out_id": VoxelTypes.IRON_INGOT,  "in": [[VoxelTypes.IRON_INGOT, 3], [VoxelTypes.STICK, 2]]},
-	{"cat": "Tools", "kind": "tool", "tool": "Diamond Pickaxe", "out_name": "Diamond Pickaxe", "out_id": VoxelTypes.DIAMOND,     "in": [[VoxelTypes.DIAMOND, 3], [VoxelTypes.STICK, 2]]},
-	{"cat": "Tools", "kind": "tool", "tool": "Gold Pickaxe",    "out_name": "Gold Pickaxe",    "out_id": VoxelTypes.GOLD_INGOT,  "in": [[VoxelTypes.GOLD_INGOT, 3], [VoxelTypes.STICK, 2]]},
+	{"cat": "Tools", "kind": "tool", "tool": "Wooden Hammer",  "out_name": "Wooden Hammer",  "out_id": VoxelTypes.PLANKS,      "in": [[VoxelTypes.PLANKS, 3], [VoxelTypes.STICK, 2]]},
+	{"cat": "Tools", "kind": "tool", "tool": "Stone Hammer",   "out_name": "Stone Hammer",   "out_id": VoxelTypes.COBBLESTONE, "in": [[VoxelTypes.COBBLESTONE, 3], [VoxelTypes.STICK, 2]]},
+	{"cat": "Tools", "kind": "tool", "tool": "Iron Hammer",    "out_name": "Iron Hammer",    "out_id": VoxelTypes.IRON_INGOT,  "in": [[VoxelTypes.IRON_INGOT, 3], [VoxelTypes.STICK, 2]]},
+	{"cat": "Tools", "kind": "tool", "tool": "Diamond Hammer", "out_name": "Diamond Hammer", "out_id": VoxelTypes.DIAMOND,     "in": [[VoxelTypes.DIAMOND, 3], [VoxelTypes.STICK, 2]]},
+	{"cat": "Tools", "kind": "tool", "tool": "Gold Hammer",    "out_name": "Gold Hammer",    "out_id": VoxelTypes.GOLD_INGOT,  "in": [[VoxelTypes.GOLD_INGOT, 3], [VoxelTypes.STICK, 2]]},
 	{"cat": "Tools", "kind": "tool", "tool": "Wooden Sword",    "out_name": "Wooden Sword",    "out_id": VoxelTypes.PLANKS,      "in": [[VoxelTypes.PLANKS, 2], [VoxelTypes.STICK, 1]]},
 	{"cat": "Tools", "kind": "tool", "tool": "Stone Sword",     "out_name": "Stone Sword",     "out_id": VoxelTypes.COBBLESTONE, "in": [[VoxelTypes.COBBLESTONE, 2], [VoxelTypes.STICK, 1]]},
 	{"cat": "Tools", "kind": "tool", "tool": "Iron Sword",      "out_name": "Iron Sword",      "out_id": VoxelTypes.IRON_INGOT,  "in": [[VoxelTypes.IRON_INGOT, 2], [VoxelTypes.STICK, 1]]},
@@ -119,13 +119,7 @@ func _build() -> void:
 	_panel.add_child(center)
 
 	var frame := PanelContainer.new()
-	var box := StyleBoxFlat.new()
-	box.bg_color = Color(0.10, 0.11, 0.14, 0.97)
-	box.set_border_width_all(3)
-	box.border_color = Color(0.55, 0.58, 0.66, 0.9)
-	box.set_corner_radius_all(8)
-	box.set_content_margin_all(22)
-	frame.add_theme_stylebox_override("panel", box)
+	frame.add_theme_stylebox_override("panel", UITheme.dialog_box())   # shared in-game dialog look
 	center.add_child(frame)
 
 	var vb := VBoxContainer.new()
@@ -150,7 +144,7 @@ func _build() -> void:
 	for i in range(Inventory.SIZE):
 		var cell := _make_swatch(SWATCH)
 		grid.add_child(cell.panel)
-		_mat_slots.append({"panel": cell.panel, "swatch": cell.swatch, "count": cell.count})
+		_mat_slots.append({"panel": cell.panel, "swatch": cell.swatch, "icon": cell.icon, "count": cell.count})
 
 	vb.add_child(_separator())
 
@@ -273,13 +267,11 @@ func _build_recipe_row(idx: int) -> Control:
 	name_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(name_lbl)
 
-	var btn := Button.new()
-	btn.text = "Craft"
-	btn.custom_minimum_size = Vector2(100, SWATCH)
+	var btn := UITheme.make_button("Craft", "primary", Vector2(110, SWATCH))
 	btn.pressed.connect(_craft.bind(idx))
 	row.add_child(btn)
 
-	_recipe_rows.append({"btn": btn, "idx": idx})
+	_recipe_rows.append({"btn": btn, "idx": idx, "row": row})
 	return row
 
 ## True if the inventory holds every input of a recipe.
@@ -308,7 +300,7 @@ func _refresh() -> void:
 			var tex: Texture2D = ItemIcons.icon(s.id)
 			ui.icon.texture = tex
 			ui.swatch.color = Color(0, 0, 0, 0) if tex != null else VoxelTypes.color_of(s.id)
-			ui.count.text = str(s.count)
+			ui.count.text = str(s.count) if s.count > 1 else ""
 			ui.panel.tooltip_text = "%s  ×%d" % [VoxelTypes.name_of(s.id), s.count]
 		else:
 			ui.icon.texture = null
@@ -324,9 +316,12 @@ func _refresh() -> void:
 		elif kind == "armor":
 			owned = int(player.armor_tier) >= int(r.get("armor", 0))
 		var afford: bool = _can_afford(r)
+		# Dim the WHOLE row when you can't afford it, so you can scan for "what can I make now"
+		# at a glance. Owned recipes stay bright with a muted "Owned" button.
+		var craftable: bool = afford and not owned
+		rr.row.modulate = Color(1, 1, 1, 1) if (craftable or owned) else Color(1, 1, 1, 0.4)
 		rr.btn.disabled = owned or not afford
 		rr.btn.text = "Owned" if owned else "Craft"
-		rr.btn.modulate = Color(1, 1, 1, 1) if (afford and not owned) else Color(1, 1, 1, 0.5)
 		rr.btn.tooltip_text = "%s → %d %s" % [_inputs_label(r), int(r.get("out_n", 1)), _out_name(r)]
 
 func _craft(idx: int) -> void:
@@ -379,6 +374,7 @@ func toggle() -> void:
 ## Open the screen in a context: "hand" (C key — basics anywhere), "table" (Crafting
 ## Table, adds Tools/Armor) or "furnace" (adds Smelt). Stations call this on interact.
 func open_for(ctx: String) -> void:
+	get_tree().call_group("chest_ui", "close")   # never stack with an open chest (symmetric with chest opening)
 	_context = ctx
 	open = true
 	_panel.visible = true

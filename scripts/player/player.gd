@@ -9,6 +9,8 @@ signal item_crafted(id: int)
 signal mob_killed
 @warning_ignore("unused_signal")   # emitted by main.gd on the day transition
 signal night_survived
+@warning_ignore("unused_signal")   # main.gd listens to clear spawn-camping hostiles
+signal respawned
 
 ## Third-person (toggle first-person) Minecraft-style controller.
 ## Move WASD, look mouse, Space jump (double-tap or F = fly), Ctrl sprint, Shift
@@ -114,8 +116,10 @@ var hunger := float(MAX_HUNGER)
 var spawn_point := Vector3(0, 4, 0)
 var _was_on_floor := true
 var _fall_speed := 0.0
+var _horiz_speed := 0.0          # horizontal speed, computed once per frame after move_and_slide
+var _jump_sfx_cd := 0.0          # throttles jump push-off feedback so a held bounce can't spam it
 var _landed_once := false
-var _ext_push := Vector3.ZERO   # one-frame external shove (tsunami wave), applied with collision
+var _ext_push := Vector3.ZERO   # one-frame external shove (e.g. mob knockback), applied with collision
 var _regen_block := 0.0         # seconds remaining where passive health regen is suppressed (post-hit)
 
 var inventory: Inventory
@@ -153,6 +157,7 @@ var snd_swing: AudioStreamPlayer
 var snd_eat: AudioStreamPlayer
 var snd_pickup: AudioStreamPlayer
 var snd_monster: AudioStreamPlayer
+var snd_swim: AudioStreamPlayer
 
 func _ready() -> void:
 	InputActions.setup()   # ensure movement actions exist (idempotent; main.gd also calls it)
@@ -292,11 +297,11 @@ func _setup_model() -> void:
 	owned_tools = _starter_tools()
 	weapon_holder.setup(skel, owned_tools)
 
-## Earn-your-gear: you begin owning only a Wooden Pickaxe (equipped) + Bare Hands.
+## Earn-your-gear: you begin owning only a Wooden Hammer (equipped) + Bare Hands.
 ## Everything else is crafted (tiered tools/swords) or unlocked via advancements.
 func _starter_tools() -> Array:
 	var out: Array = []
-	for n in ["Wooden Pickaxe", "Bare Hands"]:
+	for n in ["Wooden Hammer", "Bare Hands"]:
 		var w := WeaponRegistry.by_name(n)
 		if not w.is_empty():
 			out.append(w)
@@ -354,6 +359,7 @@ func _setup_audio() -> void:
 	snd_eat        = _make_snd("res://assets/audio/sfx/player/eat.mp3",        -4.0)
 	snd_pickup     = _make_snd("res://assets/audio/sfx/items/pickup.mp3",      -6.0)
 	snd_monster    = _make_snd("res://assets/audio/sfx/mobs/monster_hurt.mp3", -5.0)
+	snd_swim       = _make_snd("res://assets/audio/sfx/fauna/splash.mp3",      -13.0)   # swim-stroke splash
 
 	# Pooled playback voices: one-shots (mining swings, footsteps, a burst of pickups) play on
 	# a free voice so they overlap naturally instead of restarting the one shared player.
@@ -602,6 +608,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			_select(selected + 1)
 	elif event is InputEventKey and event.pressed and not event.echo:
+		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+			return                  # a menu (crafting/chest/pause) or the death screen owns input — ignore gameplay hotkeys
 		if event.is_action_pressed("jump"):
 			var now := Time.get_ticks_msec()
 			if now - _last_space_ms < DOUBLE_TAP_MS:
@@ -676,10 +684,12 @@ func _build_viewmodel() -> void:
 	# Resolve the held weapon's model. Bare hands (or a tool with no model) falls back to the
 	# fist, which then becomes the single held object — never shown alongside a weapon.
 	var path := ""
+	var cat := ""
 	if weapon_holder:
 		var w: Dictionary = weapon_holder.current()
 		if not w.is_empty():
 			path = String(w.get("path", ""))
+			cat = String(w.get("category", ""))
 	var packed: PackedScene = null
 	if path != "" and ResourceLoader.exists(path):
 		packed = load(path) as PackedScene
@@ -698,7 +708,9 @@ func _build_viewmodel() -> void:
 	grip.add_child(m)
 	var box := _merged_aabb(m)
 	var longest := maxf(box.size.x, maxf(box.size.y, box.size.z))
-	var s := 0.28 / longest if longest > 0.0001 else 1.0
+	# The pickaxe is shown as the biggest weapon we have (the maul) and held large.
+	var target := 0.66 if cat == "pickaxe" else 0.28
+	var s := target / longest if longest > 0.0001 else 1.0
 	m.scale = Vector3(s, s, s)
 	# Offset along the weapon's longest axis so the handle runs down toward the lower-right
 	# corner and the blade/head extends up into view (held-tool framing), not centred.
@@ -745,7 +757,7 @@ func _build_fp_arm(root: Node3D) -> void:
 func _animate_viewmodel(delta: float) -> void:
 	if _viewmodel == null or not is_instance_valid(_viewmodel):
 		return
-	var horiz := Vector2(velocity.x, velocity.z).length()
+	var horiz := _horiz_speed
 	var moving := horiz > 0.5 and is_on_floor()
 	_vm_phase += delta * (9.0 if moving else 2.5)
 	var amp := 0.03 if moving else 0.008
@@ -904,16 +916,19 @@ func _physics_process(delta: float) -> void:
 			velocity.y = 0.0 if _ground_streaming() else velocity.y - gravity * delta
 		elif Input.is_action_pressed("jump") and not ui_open:
 			velocity.y = JUMP_VELOCITY
+			_jump_feedback()
 		elif on_floor and dir.length() > 0.1:
 			_try_auto_step(dir)   # Minecraft-style: hop up a single-block ledge automatically
 
-	# External pushes (e.g. a tsunami wave shoving the player inland) — applied here so
+	# External pushes (e.g. mob knockback shoving the player back) — applied here so
 	# move_and_slide resolves them against terrain, then cleared for the next frame.
 	if _ext_push != Vector3.ZERO:
-		velocity += _ext_push
+		if not ui_open:                  # don't get shoved (e.g. off a ledge) while a menu is open
+			velocity += _ext_push
 		_ext_push = Vector3.ZERO
 	_fall_speed = maxf(0.0, -velocity.y)
 	move_and_slide()
+	_horiz_speed = Vector2(velocity.x, velocity.z).length()   # once per frame; the feel helpers reuse it
 
 	if model and dir.length() > 0.1:
 		var ty := atan2(dir.x, dir.z) + MODEL_YAW_OFFSET
@@ -924,6 +939,7 @@ func _physics_process(delta: float) -> void:
 	if _mine_timer > 0.0: _mine_timer -= delta
 	if _hurt_cd > 0.0: _hurt_cd -= delta
 	if _invuln > 0.0: _invuln -= delta
+	if _jump_sfx_cd > 0.0: _jump_sfx_cd -= delta
 	_update_shake(delta)
 
 	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
@@ -956,7 +972,7 @@ func _physics_process(delta: float) -> void:
 	_update_highlight()
 	_update_animation()
 	_animate_viewmodel(delta)
-	_update_footsteps(delta)
+	_update_footsteps(delta, in_water)
 	_update_camera_feel(delta, sprinting and not flying, on_floor)
 	_update_vitals(delta, dir.length() > 0.5, sprinting)
 
@@ -1015,8 +1031,8 @@ func _try_farm(tcell: Vector3i, tid: int) -> bool:
 				return true
 	return false
 
-func _update_footsteps(delta: float) -> void:
-	var horiz := Vector2(velocity.x, velocity.z).length()
+func _update_footsteps(delta: float, in_water: bool) -> void:
+	var horiz := _horiz_speed
 	if is_on_floor() and horiz > 1.0:
 		_step_timer -= delta
 		if _step_timer <= 0.0:
@@ -1024,8 +1040,24 @@ func _update_footsteps(delta: float) -> void:
 			if world_manager:
 				var bt: int = world_manager.get_block(int(global_position.x), int(global_position.y) - 1, int(global_position.z))
 				_play_snd(_step_sound_for(bt))
+	elif in_water and horiz > 0.5:
+		_step_timer -= delta
+		if _step_timer <= 0.0:
+			_step_timer = STEP_INTERVAL * 1.6        # slower stroke cadence than footsteps
+			_play_snd(snd_swim)                      # rhythmic splash so swimming isn't silent
 	else:
 		_step_timer = 0.0
+
+## Push-off feedback so a jump has weight to match the (heavily juiced) landing — a soft thud of
+## the block underfoot plus a little dust at the feet. Cooled down so a held bounce can't spam it.
+func _jump_feedback() -> void:
+	if _jump_sfx_cd > 0.0:
+		return
+	_jump_sfx_cd = 0.25
+	if world_manager:
+		var bt: int = world_manager.get_block(int(global_position.x), int(global_position.y) - 1, int(global_position.z))
+		_play_snd(_step_sound_for(bt))
+	_emit_burst(global_position + Vector3(0, 0.05, 0), Color(0.72, 0.66, 0.52), 6, 0.35, 80.0, 0.6, 1.6, 5.0)
 
 ## The footstep / placement sound matching the material underfoot (or being placed):
 ## stone-family clack, sandy crunch, hollow wood knock, soft grass/dirt otherwise.
@@ -1068,7 +1100,7 @@ func _try_auto_step(dir: Vector3) -> void:
 func _update_camera_feel(delta: float, sprinting: bool, on_floor: bool) -> void:
 	if camera == null:
 		return
-	var horiz := Vector2(velocity.x, velocity.z).length()
+	var horiz := _horiz_speed
 	var target_fov := SPRINT_FOV if (sprinting and horiz > WALK_SPEED + 0.5) else BASE_FOV
 	camera.fov = lerpf(camera.fov, target_fov, delta * 8.0)
 	# Decay the landing dip unconditionally so it can't get stuck when in third person.
@@ -1118,7 +1150,7 @@ func _update_vitals(delta: float, moving: bool, sprinting: bool) -> void:
 func _update_animation() -> void:
 	if anim_player == null:
 		return
-	var horiz := Vector2(velocity.x, velocity.z).length()
+	var horiz := _horiz_speed
 	var sprinting := Input.is_action_pressed("sprint")
 	var want := walk_anim
 	var freeze := false
@@ -1153,9 +1185,8 @@ func _handle_left() -> void:
 	if world_manager.has_torch(tcell):
 		_reset_mining()
 		if world_manager.remove_torch(tcell):
-			collect_item(VoxelTypes.TORCH, 1)   # pick the torch back up
+			give_or_drop(VoxelTypes.TORCH, 1)   # back to the bag, or dropped if full — never destroyed
 			_play_snd(snd_break_soft)
-			on_inventory_changed()
 		return
 	_mine_terrain()
 
@@ -1253,10 +1284,9 @@ func _break_block(cell: Vector3i, id: int) -> void:
 	world_manager.set_block(cell.x, cell.y, cell.z, VoxelTypes.AIR)
 	if farm:
 		farm.on_block_removed(cell)        # clear a crop sitting here / above broken farmland
-	# Tier gate: too weak a pickaxe still breaks the block but yields no drop.
+	# Tier gate: too weak a pickaxe still breaks the block but yields no drop. (The warning is
+	# shown once when you first target the block in _mine_terrain — no need to repeat it here.)
 	if VoxelTypes.mine_tier(id) > _pickaxe_tier():
-		if hud and hud.has_method("flash_tool_weak"):
-			hud.flash_tool_weak(id)
 		return
 	# Breaking a chest spills its stored contents back to you so nothing is lost.
 	if id == VoxelTypes.CHEST and world_manager.chests.has(cell):
@@ -1305,6 +1335,7 @@ func _try_place() -> void:
 			inventory.remove_one(selected)
 			_play_snd(snd_place)
 			_vm_place = 1.0
+			_emit_burst(Vector3(cell) + Vector3(0.5, 0.5, 0.5), Color(1.0, 0.85, 0.5), 6, 0.35, 70.0, 0.6, 1.6, 4.0)   # warm placement poof
 			on_inventory_changed()
 		return
 	world_manager.set_block(cell.x, cell.y, cell.z, id)
@@ -1338,9 +1369,15 @@ func _try_eat() -> void:
 	inventory.remove_one(slot)
 	hunger = minf(MAX_HUNGER, hunger + restore)
 	_play_snd(snd_eat)
+	_vm_place = 1.0                        # raise-to-mouth motion on the viewmodel
+	if camera:                            # a few crumbs at the mouth so eating reads, not just a sound
+		_emit_burst(camera.global_position - camera.global_transform.basis.z * 0.5 + Vector3(0, -0.15, 0),
+			Color(0.80, 0.62, 0.42), 8, 0.45, 55.0, 0.6, 1.6, 4.0)
 	_update_hud()
+	if hud and hud.has_method("flash_hunger"):
+		hud.flash_hunger()
 
-## External shove applied on the next physics frame (used by the tsunami wave). Ignored
+## External shove applied on the next physics frame (e.g. mob knockback). Ignored
 ## while flying so the storm can't fling a flying player around.
 func push(v: Vector3) -> void:
 	if not flying:
@@ -1394,7 +1431,7 @@ func give_or_drop(id: int, n: int) -> void:
 	on_inventory_changed()
 	if left > 0 and world_manager:
 		var cell := Vector3i(floori(global_position.x), floori(global_position.y), floori(global_position.z))
-		for i in range(mini(left, 64)):
+		for i in range(left):                   # drop EVERY overflow item (no 64-cap data loss) — rare full-bag path
 			_spawn_drop(cell, id)
 
 ## Quadratic-falloff camera shake via the camera's frustum offset — this shakes the
@@ -1449,6 +1486,7 @@ func _enter_death() -> void:
 	add_trauma(0.9)
 	get_tree().call_group("ducker", "duck", 1.0, 1.2)
 	get_tree().call_group("crafting_ui", "close")   # never leave a menu stuck under the death screen
+	get_tree().call_group("chest_ui", "close")      # ditto the chest (it's on a layer above the death screen)
 	# Death cam: drop to third person so you watch the robot topple, freeze its walk
 	# cycle, fall it over, and burst it into sparks.
 	_death_prev_fp = first_person
@@ -1513,6 +1551,11 @@ func _spawn_death_vfx() -> void:
 		p.global_position = global_position + Vector3(0, 1.0, 0)
 		p.finished.connect(p.queue_free)
 
+## True while the death screen is up (pre-respawn). Lets the pause menu refuse to grab the
+## mouse over the death overlay (which would hide the cursor and block the Respawn button).
+func is_dead() -> bool:
+	return _dead
+
 func _do_respawn() -> void:
 	health = max_health
 	hunger = float(MAX_HUNGER)
@@ -1535,11 +1578,14 @@ func _do_respawn() -> void:
 	_update_hud()
 
 func _respawn() -> void:
+	flying = false                 # always respawn grounded (creative fly is off until re-toggled)
 	velocity = Vector3.ZERO
 	global_position = spawn_point
 	_fall_speed = 0.0
 	_was_on_floor = true
 	_landed_once = false
+	_invuln = maxf(_invuln, 2.0)   # spawn grace on EVERY respawn path (death + void-fall)
+	respawned.emit()               # let main clear any hostiles camping the spawn (no death-loop)
 
 func _spawn_drop(cell: Vector3i, id: int) -> void:
 	if world_manager == null:
@@ -1598,8 +1644,8 @@ func apply_save(p: Dictionary) -> void:
 				sy = ground + 2.0
 		global_position = Vector3(sx, sy, sz)
 		spawn_point = global_position
-	health = int(p.get("health", health))
-	hunger = float(p.get("hunger", hunger))
+	health = clampi(int(p.get("health", health)), 0, max_health)   # never load out-of-range / negative HP
+	hunger = clampf(float(p.get("hunger", hunger)), 0.0, float(MAX_HUNGER))
 	selected = clampi(int(p.get("selected", 0)), 0, Inventory.HOTBAR - 1)
 	for tn in p.get("tools", []):
 		unlock_tool(String(tn), false)          # re-grant crafted tools without re-equipping

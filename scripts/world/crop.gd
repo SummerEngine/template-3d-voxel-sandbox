@@ -23,8 +23,11 @@ const OFFS := [
 static var _crop_mat: StandardMaterial3D
 static var _stage_mesh: Array = [null, null, null]
 
+const SWAY_DIST_SQ := 26.0 * 26.0   # only animate sway for crops the player is near enough to see move
+
 var stage := 0                   # set by the FarmManager before add_child; _ready builds it
 var grow_t := 0.0
+var player                       # set by the FarmManager — used to skip sway on distant fields
 var _model: MeshInstance3D
 var _phase := 0.0
 var _rng := RandomNumberGenerator.new()
@@ -46,8 +49,10 @@ func _process(delta: float) -> void:
 			_build()
 			if is_mature():
 				_ripen_sparkle()
-	# Gentle breeze sway of the whole plant (per-instance node transform; mesh stays shared).
-	if _model and is_instance_valid(_model):
+	# Gentle breeze sway (per-instance node transform; mesh stays shared). Skipped for crops far
+	# from the player — a distant field doesn't need per-frame transforms it can't be seen moving.
+	if _model and is_instance_valid(_model) and player and is_instance_valid(player) \
+			and global_position.distance_squared_to(player.global_position) < SWAY_DIST_SQ:
 		_phase += delta * 1.6
 		_model.rotation.z = sin(_phase) * 0.06
 		_model.rotation.x = cos(_phase * 0.8) * 0.04

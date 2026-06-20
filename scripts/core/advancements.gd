@@ -16,11 +16,11 @@ var open := false
 # id, title, desc, and optional reward = an exotic weapon name unlocked on completion.
 const ADV := [
 	{"id": "wood",        "title": "Getting Wood",   "desc": "Harvest a block of wood."},
-	{"id": "stone_pick",  "title": "Stone Age",      "desc": "Craft a Stone Pickaxe."},
+	{"id": "stone_pick",  "title": "Stone Age",      "desc": "Craft a Stone Hammer."},
 	{"id": "smelt_iron",  "title": "Hot Topic",      "desc": "Smelt an Iron Ingot."},
-	{"id": "iron_pick",   "title": "Iron Will",      "desc": "Craft an Iron Pickaxe.",   "reward": "Broadsword"},
+	{"id": "iron_pick",   "title": "Iron Will",      "desc": "Craft an Iron Hammer.",   "reward": "Broadsword"},
 	{"id": "diamond",     "title": "Diamonds!",      "desc": "Mine a diamond.",          "reward": "Bardiche"},
-	{"id": "geared",      "title": "Fully Geared",   "desc": "Get a Diamond Pickaxe and Diamond Armor.", "reward": "Heavy Maul"},
+	{"id": "geared",      "title": "Fully Geared",   "desc": "Get a Diamond Hammer and Diamond Armor.", "reward": "Heavy Maul"},
 	{"id": "night1",      "title": "Night Survivor", "desc": "Survive your first night.", "reward": "Spiked Mace"},
 	{"id": "veteran",     "title": "Veteran",        "desc": "Survive three nights.",     "reward": "Sledgehammer"},
 	{"id": "hunter",      "title": "Monster Hunter", "desc": "Defeat 10 hostile mobs.",   "reward": "War Axe"},
@@ -59,11 +59,11 @@ func _on_night() -> void:
 func _met(id: String) -> bool:
 	match id:
 		"wood":       return _harvested.has(VoxelTypes.WOOD)
-		"stone_pick": return player.owns_tool("Stone Pickaxe")
+		"stone_pick": return player.owns_tool("Stone Hammer")
 		"smelt_iron": return _crafted.has(VoxelTypes.IRON_INGOT)
-		"iron_pick":  return player.owns_tool("Iron Pickaxe")
+		"iron_pick":  return player.owns_tool("Iron Hammer")
 		"diamond":    return _harvested.has(VoxelTypes.DIAMOND_ORE)
-		"geared":     return player.owns_tool("Diamond Pickaxe") and int(player.armor_tier) >= 2
+		"geared":     return player.owns_tool("Diamond Hammer") and int(player.armor_tier) >= 2
 		"night1":     return _stats.nights >= 1
 		"veteran":    return _stats.nights >= 3
 		"hunter":     return _stats.mobs >= 10
@@ -99,13 +99,7 @@ func _build_panel() -> void:
 
 	var frame := PanelContainer.new()
 	frame.position = Vector2(40, 90)
-	var box := StyleBoxFlat.new()
-	box.bg_color = Color(0.08, 0.09, 0.12, 0.92)
-	box.set_border_width_all(2)
-	box.border_color = Color(0.5, 0.55, 0.62, 0.8)
-	box.set_corner_radius_all(6)
-	box.set_content_margin_all(16)
-	frame.add_theme_stylebox_override("panel", box)
+	frame.add_theme_stylebox_override("panel", UITheme.dialog_box())   # shared in-game dialog look
 	_panel.add_child(frame)
 
 	var vb := VBoxContainer.new()
@@ -131,7 +125,7 @@ func _refresh_panel() -> void:
 		if row == null:
 			continue
 		var done: bool = _done.has(a.id)
-		row.text = "%s  %s — %s" % ["[x]" if done else "[  ]", a.title, a.desc]
+		row.text = "%s  %s — %s" % ["✓" if done else "○", a.title, a.desc]
 		row.modulate = Color(0.6, 1.0, 0.65) if done else Color(0.7, 0.72, 0.78)
 
 func _unhandled_input(event: InputEvent) -> void:

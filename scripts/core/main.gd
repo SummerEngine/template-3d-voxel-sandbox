@@ -60,6 +60,8 @@ func _ready() -> void:
 		save = WorldSave.load_data()
 		world.overrides = WorldSave.overrides_from(save)
 		world.chests = WorldSave.chests_from(save)
+		for tc in WorldSave.torches_from(save):
+			world.place_torch(tc)                    # rebuild placed torch lights
 
 	# Spawn position (saved, else open dry ground near the origin — never under a tree).
 	var spawn := _find_spawn()
@@ -83,6 +85,7 @@ func _ready() -> void:
 	player.world_manager = world
 	add_child(player)
 	world.player = player
+	player.respawned.connect(_on_player_respawned)   # clear spawn-campers so death isn't a loop
 
 	# Day/night drives the sun, sky and night-mob spawning.
 	day_night = DayNight.new()
@@ -91,7 +94,7 @@ func _ready() -> void:
 	day_night.setup(_sun, _env, _sky_mat)
 	day_night.phase_changed.connect(_on_phase_changed)
 
-	# Seasons + weather (sandstorms in the desert, tsunamis at the coast, rain/storms/snow).
+	# Seasons + weather (sandstorms in the desert, rain / thunderstorms / snow).
 	# Added after DayNight so its fog/dimming/tint layers on top of the day cycle each frame.
 	var weather := preload("res://scripts/world/weather.gd").new()
 	weather.name = "Weather"
@@ -234,7 +237,7 @@ func _setup_environment() -> void:
 	# sky (blue by day, orange at dusk, dark at night).
 	_env.fog_enabled = true
 	_env.fog_light_color = Color(0.78, 0.86, 0.95)   # day horizon; DayNight refreshes it
-	_env.fog_density = 0.03
+	_env.fog_density = 0.02                            # matched to the farther render distance (Weather.BASE_FOG)
 	_env.fog_sky_affect = 0.0
 	_env.fog_aerial_perspective = 0.4
 	var we := WorldEnvironment.new()
@@ -281,11 +284,15 @@ func _spawn_animals() -> void:
 		# Find a dry spot near the player (a few tries; skip ocean/lake).
 		var ax := cx
 		var az := cz
+		var found := false
 		for _try in range(6):
 			ax = cx + _rng.randi_range(-14, 14)
 			az = cz + _rng.randi_range(-14, 14)
 			if world.surface_height(ax, az) > world.SEA_LEVEL:
+				found = true
 				break
+		if not found:
+			continue                       # all tries hit water — skip rather than spawn a land animal in the sea
 		var ah: int = world.surface_height(ax, az) + 2
 		var a := preload("res://scripts/entities/animal.gd").new()
 		a.world = world
@@ -367,6 +374,21 @@ func _clear_hostiles() -> void:
 		if is_instance_valid(m):
 			m.queue_free()
 	_hostiles.clear()
+
+## On respawn, despawn hostiles camping the spawn point so a night death isn't an instant re-kill
+## loop. Distant horde members are left alone (you still have a world to deal with).
+func _on_player_respawned() -> void:
+	if player == null:
+		return
+	var r2 := 14.0 * 14.0
+	var kept: Array = []
+	for m in _hostiles:
+		if is_instance_valid(m):
+			if m.global_position.distance_squared_to(player.spawn_point) <= r2:
+				m.queue_free()
+			else:
+				kept.append(m)
+	_hostiles = kept
 
 ## Dawn: set the surviving horde alight instead of deleting it — they smoke, sear, and topple
 ## over a couple of seconds (self-freeing on death). Cancels any pending spawns first.

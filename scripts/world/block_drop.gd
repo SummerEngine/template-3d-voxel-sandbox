@@ -10,6 +10,8 @@ const PICKUP_RADIUS := 1.4
 const MAGNET_SPEED := 6.0
 const ItemIcons := preload("res://scripts/ui/item_icons.gd")
 
+const DESPAWN_AFTER := 300.0      # uncollected drops vanish after 5 min (Minecraft rule) — no infinite buildup
+
 var block_id := VoxelTypes.AIR
 var manager                       # ChunkManager
 var player                        # Player
@@ -59,6 +61,9 @@ func _ready() -> void:
 
 func _physics_process(delta: float) -> void:
 	_age += delta
+	if _age > DESPAWN_AFTER:               # uncollected too long (e.g. inventory full) — clean up
+		queue_free()
+		return
 	_mesh.rotate_y(delta * 2.2)
 	_mesh.position.y = 0.05 + sin(_age * 3.0) * 0.06
 

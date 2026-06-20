@@ -264,12 +264,12 @@ func _on_option(id: String) -> void:
 		"single", "create":
 			GameState.load_on_start = false
 			get_tree().paused = false
-			get_tree().change_scene_to_file("res://main.tscn")
+			get_tree().change_scene_to_file("res://scenes/loading.tscn")
 		"load":
 			if WorldSave.has_save():
 				GameState.load_on_start = true
 				get_tree().paused = false
-				get_tree().change_scene_to_file("res://main.tscn")
+				get_tree().change_scene_to_file("res://scenes/loading.tscn")
 			else:
 				_show_toast("No saved worlds yet")
 		"settings":
@@ -278,11 +278,13 @@ func _on_option(id: String) -> void:
 		"exit":
 			get_tree().quit()
 
+var _toast_token := 0   # bumped per toast so an earlier timer can't hide a newer toast
+
 func _show_toast(msg: String) -> void:
 	_toast.text = msg
 	_toast.visible = true
-	get_tree().create_timer(2.5).timeout.connect(_hide_toast)
-
-func _hide_toast() -> void:
-	if is_instance_valid(_toast):
-		_toast.visible = false
+	_toast_token += 1
+	var tok := _toast_token
+	get_tree().create_timer(2.5).timeout.connect(func() -> void:
+		if tok == _toast_token and is_instance_valid(_toast):
+			_toast.visible = false)

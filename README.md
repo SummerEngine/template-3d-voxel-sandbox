@@ -10,7 +10,7 @@ explore — and a clean, documented foundation to build your own on top of.
 
 **World & exploration**
 - Streamed voxel terrain with biomes — meadow, forest, jungle, desert, snow, mountains, oceans & rivers
-- Day/night cycle, dynamic weather + seasons (rain, snow, sandstorms, thunder, tsunamis)
+- Day/night cycle, dynamic weather + seasons (rain, snow, sandstorms, thunder)
 - Discoverable structures with loot — ruined towers, guarded crypts, treasure caches
 - Ambient life — fireflies at night, drifting pollen by day, shooting stars
 

@@ -45,13 +45,7 @@ func _build() -> void:
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_panel.add_child(center)
 	var frame := PanelContainer.new()
-	var box := StyleBoxFlat.new()
-	box.bg_color = Color(0.10, 0.11, 0.14, 0.97)
-	box.set_border_width_all(3)
-	box.border_color = Color(0.55, 0.58, 0.66, 0.9)
-	box.set_corner_radius_all(8)
-	box.set_content_margin_all(22)
-	frame.add_theme_stylebox_override("panel", box)
+	frame.add_theme_stylebox_override("panel", UITheme.dialog_box())   # shared in-game dialog look
 	center.add_child(frame)
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 8)
@@ -69,9 +63,8 @@ func _build() -> void:
 	lbl.modulate = Color(0.75, 0.82, 0.95)
 	vb.add_child(lbl)
 	vb.add_child(_grid(_inv_slots, "inv"))
-	var close_btn := Button.new()
-	close_btn.text = "Close"
-	close_btn.custom_minimum_size = Vector2(0, 40)
+	var close_btn := UITheme.make_button("Close", "normal", Vector2(140, 40))
+	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	close_btn.pressed.connect(close)
 	vb.add_child(close_btn)
 	var hint := Label.new()
@@ -163,7 +156,7 @@ func _fill(ui_slots: Array, data: Array) -> void:
 			var tex: Texture2D = ItemIcons.icon(data[i].id)
 			ui_slots[i].icon.texture = tex
 			ui_slots[i].swatch.color = Color(0, 0, 0, 0) if tex != null else VoxelTypes.color_of(data[i].id)
-			ui_slots[i].count.text = str(data[i].count)
+			ui_slots[i].count.text = str(data[i].count) if data[i].count > 1 else ""
 		else:
 			ui_slots[i].icon.texture = null
 			ui_slots[i].swatch.color = Color(0, 0, 0, 0)
