@@ -84,6 +84,7 @@ func _grid(store: Array, which: String) -> Control:
 	for i in range(Inventory.SIZE):
 		var btn := Button.new()
 		btn.custom_minimum_size = Vector2(SLOT, SLOT)
+		UITheme.style_slot_button(btn)   # dark slot look (was default grey)
 		var sw := ColorRect.new()
 		sw.size = Vector2(SLOT - 14, SLOT - 14)
 		sw.position = Vector2(7, 7)
@@ -99,6 +100,8 @@ func _grid(store: Array, which: String) -> Control:
 		btn.add_child(ic)
 		var ct := Label.new()
 		ct.add_theme_font_size_override("font_size", 12)
+		ct.add_theme_constant_override("outline_size", 3)   # legible over bright swatches/icons
+		ct.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 		ct.position = Vector2(SLOT - 20, SLOT - 20)
 		ct.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		btn.add_child(ct)

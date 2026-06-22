@@ -47,6 +47,23 @@ static func _btn_box(bg: Color, border: Color) -> StyleBoxFlat:
 	s.content_margin_right = 16
 	return s
 
+static func _slot_box(bg: Color, border: Color) -> StyleBoxFlat:
+	var s := StyleBoxFlat.new()
+	s.bg_color = bg
+	s.set_border_width_all(2)
+	s.border_color = border
+	s.set_corner_radius_all(3)
+	return s
+
+## Style a clickable Button as a dark inventory slot (matching the hotbar + crafting swatches), so
+## the chest grid stops rendering as default grey buttons inside the dark dialog.
+static func style_slot_button(b: Button) -> void:
+	b.add_theme_stylebox_override("normal", _slot_box(Color(0, 0, 0, 0.4), Color(0.6, 0.6, 0.65, 0.6)))
+	b.add_theme_stylebox_override("hover", _slot_box(Color(0, 0, 0, 0.5), Color(0.9, 0.92, 1.0, 0.9)))
+	b.add_theme_stylebox_override("pressed", _slot_box(Color(0, 0, 0, 0.55), Color(0.9, 0.92, 1.0, 0.95)))
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	b.focus_mode = Control.FOCUS_NONE
+
 static func make_button(text: String, kind: String = "normal", min_size := Vector2(320, 0)) -> Button:
 	var b := Button.new()
 	b.text = text

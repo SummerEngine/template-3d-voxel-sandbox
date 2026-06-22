@@ -16,11 +16,11 @@ var open := false
 # id, title, desc, and optional reward = an exotic weapon name unlocked on completion.
 const ADV := [
 	{"id": "wood",        "title": "Getting Wood",   "desc": "Harvest a block of wood."},
-	{"id": "stone_pick",  "title": "Stone Age",      "desc": "Craft a Stone Hammer."},
+	{"id": "stone_pick",  "title": "Stone Age",      "desc": "Craft a Stone Pickaxe."},
 	{"id": "smelt_iron",  "title": "Hot Topic",      "desc": "Smelt an Iron Ingot."},
-	{"id": "iron_pick",   "title": "Iron Will",      "desc": "Craft an Iron Hammer.",   "reward": "Broadsword"},
+	{"id": "iron_pick",   "title": "Iron Will",      "desc": "Craft an Iron Pickaxe.",   "reward": "Broadsword"},
 	{"id": "diamond",     "title": "Diamonds!",      "desc": "Mine a diamond.",          "reward": "Bardiche"},
-	{"id": "geared",      "title": "Fully Geared",   "desc": "Get a Diamond Hammer and Diamond Armor.", "reward": "Heavy Maul"},
+	{"id": "geared",      "title": "Fully Geared",   "desc": "Get a Diamond Pickaxe and Diamond Armor.", "reward": "Heavy Maul"},
 	{"id": "night1",      "title": "Night Survivor", "desc": "Survive your first night.", "reward": "Spiked Mace"},
 	{"id": "veteran",     "title": "Veteran",        "desc": "Survive three nights.",     "reward": "Sledgehammer"},
 	{"id": "hunter",      "title": "Monster Hunter", "desc": "Defeat 10 hostile mobs.",   "reward": "War Axe"},
@@ -59,11 +59,11 @@ func _on_night() -> void:
 func _met(id: String) -> bool:
 	match id:
 		"wood":       return _harvested.has(VoxelTypes.WOOD)
-		"stone_pick": return player.owns_tool("Stone Hammer")
+		"stone_pick": return player.owns_tool("Stone Pickaxe")
 		"smelt_iron": return _crafted.has(VoxelTypes.IRON_INGOT)
-		"iron_pick":  return player.owns_tool("Iron Hammer")
+		"iron_pick":  return player.owns_tool("Iron Pickaxe")
 		"diamond":    return _harvested.has(VoxelTypes.DIAMOND_ORE)
-		"geared":     return player.owns_tool("Diamond Hammer") and int(player.armor_tier) >= 2
+		"geared":     return player.owns_tool("Diamond Pickaxe") and int(player.armor_tier) >= 2
 		"night1":     return _stats.nights >= 1
 		"veteran":    return _stats.nights >= 3
 		"hunter":     return _stats.mobs >= 10

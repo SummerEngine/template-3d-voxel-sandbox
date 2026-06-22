@@ -7,11 +7,11 @@ class_name WeaponRegistry
 const DIR := "res://assets/models/weapons/"
 
 const WEAPONS := [
-	{"name": "Wooden Hammer",   "file": "warmaul",          "category": "pickaxe", "damage": 2,  "attack_speed": 1.4, "mining_power": 2.0, "tier": 1, "desc": "A crude wooden hammer — breaks stone and coal, but ore tougher than iron shrugs it off."},
-	{"name": "Stone Hammer",    "file": "warmaul",          "category": "pickaxe", "damage": 3,  "attack_speed": 1.4, "mining_power": 3.0, "tier": 2, "desc": "A sturdier stone hammer that pounds through iron ore as well as stone."},
-	{"name": "Iron Hammer",     "file": "warmaul",          "category": "pickaxe", "damage": 4,  "attack_speed": 1.5, "mining_power": 4.5, "tier": 3, "desc": "A forged iron hammer — fast on stone and the only thing that frees gold and diamond."},
-	{"name": "Diamond Hammer",  "file": "warmaul",          "category": "pickaxe", "damage": 5,  "attack_speed": 1.6, "mining_power": 6.0, "tier": 4, "desc": "The ultimate hammer — smashes through any block in the world at blinding speed."},
-	{"name": "Gold Hammer",     "file": "warmaul",          "category": "pickaxe", "damage": 3,  "attack_speed": 1.9, "mining_power": 7.5, "tier": 2, "desc": "A gleaming gold hammer — blisteringly fast on stone, coal and iron, but too soft to free gold or diamond."},
+	{"name": "Wooden Pickaxe",   "file": "pickaxe",          "category": "pickaxe", "damage": 2,  "attack_speed": 1.4, "mining_power": 2.0, "tier": 1, "desc": "A crude wooden pickaxe — breaks stone and coal, but ore tougher than iron shrugs it off."},
+	{"name": "Stone Pickaxe",    "file": "pickaxe",          "category": "pickaxe", "damage": 3,  "attack_speed": 1.4, "mining_power": 3.0, "tier": 2, "desc": "A sturdier stone pickaxe that bites through iron ore as well as stone."},
+	{"name": "Iron Pickaxe",     "file": "pickaxe",          "category": "pickaxe", "damage": 4,  "attack_speed": 1.5, "mining_power": 4.5, "tier": 3, "desc": "A forged iron pickaxe — fast on stone and the only thing that frees gold and diamond."},
+	{"name": "Diamond Pickaxe",  "file": "pickaxe",          "category": "pickaxe", "damage": 5,  "attack_speed": 1.6, "mining_power": 6.0, "tier": 4, "desc": "The ultimate pickaxe — cuts through any block in the world at blinding speed."},
+	{"name": "Gold Pickaxe",     "file": "pickaxe",          "category": "pickaxe", "damage": 3,  "attack_speed": 1.9, "mining_power": 7.5, "tier": 2, "desc": "A gleaming gold pickaxe — blisteringly fast on stone, coal and iron, but too soft to free gold or diamond."},
 	{"name": "Chisel",           "file": "chisel",           "category": "chisel",  "damage": 3,  "attack_speed": 2.6, "mining_power": 2.0, "desc": "A fine carving chisel that chips stone fast but barely scratches foes."},
 	{"name": "Heavy Chisel",     "file": "chisel_heavy",     "category": "chisel",  "damage": 4,  "attack_speed": 2.2, "mining_power": 2.3, "desc": "A thick-shanked chisel that bites deeper into rock and bone alike."},
 	{"name": "Wooden Sword",     "file": "sword_iron",       "category": "sword",   "damage": 3,  "attack_speed": 1.6, "mining_power": 1.0, "desc": "A whittled wooden blade — better than fists, barely."},

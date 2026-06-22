@@ -14,6 +14,7 @@ var weather
 var _toast: Label
 var _snd_click: AudioStreamPlayer
 var _settings_panel: Control
+var _settings_scroll: ScrollContainer   # holds the sliders+rebinds; height-capped so BACK stays reachable
 var _capturing_action := ""        # while non-empty, the next key press rebinds this action
 var _rebind_btns := {}             # action -> Button (its label shows the current key)
 
@@ -127,20 +128,32 @@ func _build_settings() -> void:
 	title.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(title)
+
+	# Sliders + key rebinds go in a height-capped ScrollContainer so the panel never overflows a
+	# short window; RESET / BACK stay pinned below (direct vb children) so they're always reachable.
+	_settings_scroll = ScrollContainer.new()
+	_settings_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_settings_scroll.custom_minimum_size = Vector2(480, _settings_scroll_cap())
+	vb.add_child(_settings_scroll)
+	var list := VBoxContainer.new()
+	list.add_theme_constant_override("separation", 14)
+	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_settings_scroll.add_child(list)
+
 	var pct := func(v): return "%d%%" % roundi(v * 100.0)
 	var dec := func(v): return "%.2fx" % v
 	var whole := func(v): return "%d" % int(v)
-	vb.add_child(UITheme.setting_row("Master", 0.0, 1.0, 0.05, GameSettings.master, pct, _on_master))
-	vb.add_child(UITheme.setting_row("Music", 0.0, 1.0, 0.05, GameSettings.music, pct, _on_music))
-	vb.add_child(UITheme.setting_row("Sound FX", 0.0, 1.0, 0.05, GameSettings.sfx, pct, _on_sfx))
-	vb.add_child(UITheme.setting_row("Look speed", 0.3, 2.5, 0.05, GameSettings.sensitivity, dec, _on_sens))
-	vb.add_child(UITheme.setting_row("View distance", 2, 8, 1, GameSettings.render_radius, whole, _on_render))
+	list.add_child(UITheme.setting_row("Master", 0.0, 1.0, 0.05, GameSettings.master, pct, _on_master))
+	list.add_child(UITheme.setting_row("Music", 0.0, 1.0, 0.05, GameSettings.music, pct, _on_music))
+	list.add_child(UITheme.setting_row("Sound FX", 0.0, 1.0, 0.05, GameSettings.sfx, pct, _on_sfx))
+	list.add_child(UITheme.setting_row("Look speed", 0.3, 2.5, 0.05, GameSettings.sensitivity, dec, _on_sens))
+	list.add_child(UITheme.setting_row("View distance", 2, 8, 1, GameSettings.render_radius, whole, _on_render))
 
 	var ctl := Label.new()
 	ctl.text = "Controls  (click a key, then press the new one)"
 	ctl.add_theme_font_size_override("font_size", 20)
 	ctl.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0))
-	vb.add_child(ctl)
+	list.add_child(ctl)
 	_rebind_btns = {}
 	for action in InputActions.ORDER:
 		var row := HBoxContainer.new()
@@ -155,7 +168,8 @@ func _build_settings() -> void:
 		keybtn.pressed.connect(_begin_capture.bind(action, keybtn))
 		row.add_child(keybtn)
 		_rebind_btns[action] = keybtn
-		vb.add_child(row)
+		list.add_child(row)
+
 	var reset := UITheme.make_button("RESET CONTROLS", "danger", Vector2(320, 0))
 	reset.pressed.connect(_play_click)
 	reset.pressed.connect(_reset_controls)
@@ -203,8 +217,15 @@ func _on_render(v: float) -> void:
 		world.set_render_radius(int(v))
 	GameSettings.save_cfg()
 
+## Cap the scrollable settings list to the current viewport so the panel (title + scroll + pinned
+## RESET/BACK) always fits, even on a short window.
+func _settings_scroll_cap() -> float:
+	return clampf(get_viewport().get_visible_rect().size.y - 240.0, 180.0, 460.0)
+
 func _open_settings() -> void:
 	if _settings_panel:
+		if _settings_scroll:
+			_settings_scroll.custom_minimum_size.y = _settings_scroll_cap()   # re-fit if the window resized
 		_settings_panel.visible = true
 
 func _close_settings() -> void:

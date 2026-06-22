@@ -47,7 +47,13 @@ func _apply() -> void:
 	# Blood-moon wash: strongest deep at night, none by day, so dawn still breaks normally.
 	var blood: float = (clampf(1.0 - daylight, 0.0, 1.0) * 0.85) if blood_moon else 0.0
 
-	_sun.rotation = Vector3(-asin(clampf(elev, -1.0, 1.0)), deg_to_rad(-45.0), 0.0)
+	# Arc the sun east -> overhead -> west across the day (not a fixed bearing), so shadows rake
+	# through the day and the visible sun/moon disc sweeps the sky. elev (= the direction's height)
+	# still drives all the energy/colour math below; only the bearing is animated here. The 0.3 lean
+	# keeps the noon pass slightly off dead-overhead (and avoids a degenerate look-at up-vector).
+	var sun_ang := time_of_day * TAU
+	var sun_dir := Vector3(cos(sun_ang), sin(sun_ang), 0.30).normalized()   # direction TO the sun
+	_sun.look_at_from_position(Vector3.ZERO, -sun_dir, Vector3.UP)
 	_sun.light_energy = maxf(lerpf(0.04, 1.45, daylight), 0.32 * blood)   # eerie red moonlight
 	_sun.light_color = NIGHT_SUN.lerp(DAY_SUN, daylight).lerp(BLOOD_SUN, blood)
 	_sun.shadow_enabled = daylight > 0.1

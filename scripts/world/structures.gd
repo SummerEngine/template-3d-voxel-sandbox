@@ -20,6 +20,8 @@ var player                    # Player
 var _t := 1.0
 var _placed := 0
 var _pending_guardians: Array = []   # Vector3 spots awaiting a guardian when the player nears
+var _stamped: Dictionary = {}        # grid cells already handled this session — never re-stamp
+                                     # (re-stamping a crypt re-added its guardian -> instant respawns)
 
 func setup(w, p) -> void:
 	world = w
@@ -45,6 +47,10 @@ func _process(delta: float) -> void:
 
 ## Deterministic cell -> structure. Returns true if it placed one this call.
 func _try_place(gx: int, gz: int) -> bool:
+	var gkey := Vector2i(gx, gz)
+	if _stamped.has(gkey):
+		return false                              # already handled this session — never re-stamp / re-guard
+	_stamped[gkey] = true                         # evaluate each grid cell exactly once (outcome is deterministic)
 	var h := _hash(gx, gz)
 	if h % 100 >= SPAWN_CHANCE:
 		return false

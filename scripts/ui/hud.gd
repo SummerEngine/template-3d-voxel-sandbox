@@ -20,6 +20,7 @@ var _tool: Label
 var _armor: Label
 var _block_name: Label
 var _controls: PanelContainer
+var _controls_hint: PanelContainer   # tiny "H — Controls" chip shown when the controls panel is hidden
 var _hotbar: HBoxContainer
 var _slots: Array = []          # each: {panel, swatch, count}
 var _prev_counts: Array = []    # last-seen count per slot, to pulse a slot when it gains an item
@@ -67,8 +68,22 @@ func _process(delta: float) -> void:
 		_fps.text = "FPS %d\n%d draws\n%.1fM tris" % [fps, draws, float(prims) / 1_000_000.0]
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F3:
-		_fps.visible = not _fps.visible
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_F3:
+			_fps.visible = not _fps.visible
+		elif event.keycode == KEY_H:
+			_toggle_controls()
+			get_viewport().set_input_as_handled()
+
+## Hide / show the controls guide. When hidden, a small "H — Controls" chip stays so the binding
+## is always discoverable.
+func _toggle_controls() -> void:
+	if _controls == null:
+		return
+	_controls.visible = not _controls.visible
+	if _controls_hint:
+		_controls_hint.visible = not _controls.visible
+	_center_controls()
 
 func _build_styles() -> void:
 	_style_normal = StyleBoxFlat.new()
@@ -239,6 +254,7 @@ func _build_controls() -> void:
 		["J", "Goals"],
 		["F5", "First / third person"],
 		["F3", "Stats"],
+		["H", "Hide controls"],
 		["Esc", "Pause"],
 	]
 	_controls = PanelContainer.new()
@@ -266,6 +282,37 @@ func _build_controls() -> void:
 			grid.add_child(_ctrl_cell("", false))
 	_controls.resized.connect(_center_controls)
 
+	# Minimised indicator: a small "H — Controls" chip shown in the controls panel's spot when the
+	# panel is hidden, so you always know how to bring the guide back.
+	_controls_hint = PanelContainer.new()
+	var hbox := StyleBoxFlat.new()
+	hbox.bg_color = Color(0, 0, 0, 0.34)
+	hbox.set_corner_radius_all(6)
+	hbox.set_content_margin_all(6)
+	_controls_hint.add_theme_stylebox_override("panel", hbox)
+	_controls_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 6)
+	hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_controls_hint.add_child(hb)
+	var kl := Label.new()
+	kl.text = "H"
+	kl.add_theme_font_size_override("font_size", 14)
+	kl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.42))
+	kl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_outline(kl, 3)
+	hb.add_child(kl)
+	var al := Label.new()
+	al.text = "Controls"
+	al.add_theme_font_size_override("font_size", 14)
+	al.add_theme_color_override("font_color", Color(0.95, 0.97, 1.0))
+	al.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_outline(al, 3)
+	hb.add_child(al)
+	_controls_hint.visible = false
+	add_child(_controls_hint)
+	_controls_hint.resized.connect(_center_controls)
+
 func _ctrl_row(grid: GridContainer, pair: Array) -> void:
 	grid.add_child(_ctrl_cell(String(pair[0]), true))    # the control (key) — accent colour
 	grid.add_child(_ctrl_cell(String(pair[1]), false))   # the action — white
@@ -283,10 +330,11 @@ func _ctrl_cell(text: String, is_key: bool) -> Label:
 
 ## Keep the controls panel centred across the top, clear of the corner stats + minimap.
 func _center_controls() -> void:
-	if _controls == null:
-		return
 	var vp := get_viewport().get_visible_rect().size
-	_controls.position = Vector2((vp.x - _controls.size.x) * 0.5, 8)
+	if _controls:
+		_controls.position = Vector2((vp.x - _controls.size.x) * 0.5, 8)
+	if _controls_hint:
+		_controls_hint.position = Vector2((vp.x - _controls_hint.size.x) * 0.5, 8)
 
 ## A dark-red full-screen overlay with "You Died" and a Respawn button. Hidden until
 ## the player calls show_death(); the button (or the R key) emits respawn_requested.
@@ -480,3 +528,12 @@ func flash_hunger() -> void:
 	_hunger.modulate = Color(1.6, 1.2, 0.5)
 	var tw := create_tween()
 	tw.tween_property(_hunger, "modulate", Color(0.95, 0.65, 0.25), 0.45)
+
+## Quick green pulse of the hearts when a heart regenerates (healing feedback). Returns to the
+## hearts' resting RED tint (not white), since the hearts label is modulated red.
+func flash_heal() -> void:
+	if _hearts == null:
+		return
+	_hearts.modulate = Color(0.5, 1.7, 0.7)
+	var tw := create_tween()
+	tw.tween_property(_hearts, "modulate", Color(1.0, 0.27, 0.32), 0.45)

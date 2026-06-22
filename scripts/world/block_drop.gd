@@ -17,6 +17,8 @@ var manager                       # ChunkManager
 var player                        # Player
 var _vy := 0.0
 var _age := 0.0
+var _last_probe_cell := Vector3i(2147483647, 0, 0)   # last cell probed for "resting" — re-probe only on change
+var _resting := false
 var _mesh: MeshInstance3D
 
 # Every drop is the same 0.3 cube, and a given block id always looks the same — so the mesh
@@ -67,12 +69,14 @@ func _physics_process(delta: float) -> void:
 	_mesh.rotate_y(delta * 2.2)
 	_mesh.position.y = 0.05 + sin(_age * 3.0) * 0.06
 
-	# Fall until the block directly below is solid.
-	var resting := false
+	# Fall until the block directly below is solid. get_block routes through noise for natural ground,
+	# so only re-probe when the drop moves to a new cell — a settled drop then never re-samples.
 	if manager:
-		var below: int = manager.get_block(floori(global_position.x), floori(global_position.y - 0.35), floori(global_position.z))
-		resting = VoxelTypes.is_solid(below)
-	if resting:
+		var cell := Vector3i(floori(global_position.x), floori(global_position.y - 0.35), floori(global_position.z))
+		if cell != _last_probe_cell:
+			_last_probe_cell = cell
+			_resting = VoxelTypes.is_solid(manager.get_block(cell.x, cell.y, cell.z))
+	if _resting:
 		_vy = 0.0
 	else:
 		_vy -= GRAVITY * delta

@@ -75,8 +75,11 @@ func _process(delta: float) -> void:
 	var pos: Vector3 = player.global_position
 	_fireflies.global_position = pos + Vector3(0.0, 2.5, 0.0)
 	_pollen.global_position = pos + Vector3(0.0, 3.0, 0.0)
-	_fireflies.emitting = night
-	_pollen.emitting = not night
+	# Suppress motes when the player is underground/under cover or submerged (no sunbeam pollen in
+	# a cave, no dry dust underwater) — the player computes this on a throttle.
+	var blocked: bool = player.has_method("atmosphere_blocked") and player.atmosphere_blocked()
+	_fireflies.emitting = night and not blocked
+	_pollen.emitting = (not night) and not blocked
 	if night:
 		_star_t -= delta
 		if _star_t <= 0.0:
@@ -87,7 +90,7 @@ func _process(delta: float) -> void:
 func _spawn_shooting_star(near: Vector3) -> void:
 	var star := MeshInstance3D.new()
 	var bm := BoxMesh.new()
-	bm.size = Vector3(0.7, 0.16, 0.16)
+	bm.size = Vector3(0.16, 0.16, 0.9)   # long on -Z (look_at forward) so the streak aligns to its path
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(1, 1, 1)
 	mat.emission_enabled = true
@@ -101,6 +104,8 @@ func _spawn_shooting_star(near: Vector3) -> void:
 	var start := near + Vector3(cos(a) * 45.0, 40.0, sin(a) * 45.0)
 	var travel := Vector3(-cos(a) * 65.0, -22.0, -sin(a) * 65.0)
 	star.global_position = start
+	if travel.length() > 0.01:
+		star.look_at(start + travel, Vector3.UP)   # orient the streak along its travel direction
 	var tw := create_tween()
 	tw.tween_property(star, "global_position", start + travel, 1.3).set_trans(Tween.TRANS_LINEAR)
 	tw.parallel().tween_property(mat, "emission_energy_multiplier", 0.0, 0.9).set_delay(0.4)

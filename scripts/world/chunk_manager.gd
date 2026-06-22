@@ -428,18 +428,30 @@ func remove_torch(cell: Vector3i) -> bool:
 	return true
 
 # A non-colliding prop (so it never blocks movement); removal is by targeted cell, not a raycast.
+# All torches are identical, so share one mesh + one emissive material across every placed torch
+# (a lit base/cave can hold dozens) instead of allocating a fresh pair each time.
+static var _torch_mesh: BoxMesh
+static var _torch_mat: StandardMaterial3D
+static func _shared_torch_mesh() -> BoxMesh:
+	if _torch_mesh == null:
+		_torch_mesh = BoxMesh.new()
+		_torch_mesh.size = Vector3(0.13, 0.42, 0.13)
+	return _torch_mesh
+static func _shared_torch_mat() -> StandardMaterial3D:
+	if _torch_mat == null:
+		var m := StandardMaterial3D.new()
+		m.albedo_color = Color(0.5, 0.32, 0.14)
+		m.emission_enabled = true
+		m.emission = Color(1.0, 0.62, 0.22)
+		m.emission_energy_multiplier = 2.2
+		_torch_mat = m
+	return _torch_mat
+
 func _make_torch(_cell: Vector3i) -> Node3D:
 	var root := Node3D.new()
 	var mi := MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = Vector3(0.13, 0.42, 0.13)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.5, 0.32, 0.14)
-	mat.emission_enabled = true
-	mat.emission = Color(1.0, 0.62, 0.22)
-	mat.emission_energy_multiplier = 2.2
-	bm.material = mat
-	mi.mesh = bm
+	mi.mesh = _shared_torch_mesh()
+	mi.material_override = _shared_torch_mat()
 	root.add_child(mi)
 	var light := OmniLight3D.new()
 	light.light_energy = 2.6

@@ -158,6 +158,10 @@ var snd_eat: AudioStreamPlayer
 var snd_pickup: AudioStreamPlayer
 var snd_monster: AudioStreamPlayer
 var snd_swim: AudioStreamPlayer
+var snd_dawn: AudioStreamPlayer        # a soft birdsong played at sunrise
+var _dust_motes: GPUParticles3D        # ambient air dust — suppressed when underground/underwater
+var _atmo_blocked := false             # cached: true when submerged or under solid cover
+var _atmo_t := 0.0
 
 func _ready() -> void:
 	InputActions.setup()   # ensure movement actions exist (idempotent; main.gd also calls it)
@@ -248,7 +252,32 @@ func _setup_ambient_motes() -> void:
 	m.material = mat
 	p.draw_pass_1 = m
 	p.emitting = true
+	_dust_motes = p
 	add_child(p)
+
+## Suppress ambient air dust when the head is underwater or there's solid cover overhead (a cave /
+## under a roof) — no sunbeam motes drifting through stone, no dry dust underwater. Throttled.
+func _compute_atmo_blocked() -> bool:
+	if world_manager == null:
+		return false
+	var hx := floori(global_position.x)
+	var hz := floori(global_position.z)
+	if world_manager.get_block(hx, floori(global_position.y + CAM_HEIGHT), hz) == VoxelTypes.WATER:
+		return true
+	var fy := floori(global_position.y)
+	for dy in range(2, 8):
+		var b: int = world_manager.get_block(hx, fy + dy, hz)
+		if b != VoxelTypes.AIR and b != VoxelTypes.WATER and b != VoxelTypes.LEAVES:
+			return true   # roof / underground
+	return false
+
+## Read by the ambience system so its pollen/fireflies suppress in the same places.
+func atmosphere_blocked() -> bool:
+	return _atmo_blocked
+
+## A soft birdsong at sunrise (called by main.gd on the night->day transition).
+func play_dawn_sound() -> void:
+	_play_snd(snd_dawn)
 
 func _give_starter_kit() -> void:
 	inventory.add(VoxelTypes.GRASS, 32)
@@ -297,11 +326,11 @@ func _setup_model() -> void:
 	owned_tools = _starter_tools()
 	weapon_holder.setup(skel, owned_tools)
 
-## Earn-your-gear: you begin owning only a Wooden Hammer (equipped) + Bare Hands.
+## Earn-your-gear: you begin owning only a Wooden Pickaxe (equipped) + Bare Hands.
 ## Everything else is crafted (tiered tools/swords) or unlocked via advancements.
 func _starter_tools() -> Array:
 	var out: Array = []
-	for n in ["Wooden Hammer", "Bare Hands"]:
+	for n in ["Wooden Pickaxe", "Bare Hands"]:
 		var w := WeaponRegistry.by_name(n)
 		if not w.is_empty():
 			out.append(w)
@@ -360,6 +389,7 @@ func _setup_audio() -> void:
 	snd_pickup     = _make_snd("res://assets/audio/sfx/items/pickup.mp3",      -6.0)
 	snd_monster    = _make_snd("res://assets/audio/sfx/mobs/monster_hurt.mp3", -5.0)
 	snd_swim       = _make_snd("res://assets/audio/sfx/fauna/splash.mp3",      -13.0)   # swim-stroke splash
+	snd_dawn       = _make_snd("res://assets/audio/sfx/fauna/chirp.mp3",        -6.0)   # birdsong at sunrise
 
 	# Pooled playback voices: one-shots (mining swings, footsteps, a burst of pickups) play on
 	# a free voice so they overlap naturally instead of restarting the one shared player.
@@ -601,7 +631,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		pitch_pivot.rotation.x = clampf(pitch_pivot.rotation.x - event.relative.y * mouse_sens, PITCH_MIN, PITCH_MAX)
 	elif event is InputEventMouseButton and event.pressed:
 		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
-			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+			# Mouse is free (a menu is open, or window focus was lost). NEVER let the scroll wheel
+			# re-grab the mouse or change the hotbar here — that's what made scrolling the crafting
+			# list snap the cursor back into look-mode. Only a real left click, with no menu open,
+			# re-captures (so you can still click back into the game after an alt-tab).
+			if event.button_index == MOUSE_BUTTON_LEFT and not _menu_open():
+				Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 			return
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			_select(selected - 1)
@@ -635,6 +670,18 @@ func _unhandled_input(event: InputEvent) -> void:
 				_try_eat()
 			KEY_F5:
 				_toggle_view()
+
+## True while a mouse-freeing UI menu (crafting or chest) is open. Used so a stray click/scroll
+## doesn't re-capture the mouse out from under the menu. (Pause pauses the tree; death is handled
+## separately, so neither needs checking here.)
+func _menu_open() -> bool:
+	var c = get_tree().get_first_node_in_group("crafting_ui")
+	if c and c.has_method("is_open") and c.is_open():
+		return true
+	var ch = get_tree().get_first_node_in_group("chest_ui")
+	if ch and ch.has_method("is_open") and ch.is_open():
+		return true
+	return false
 
 func _select(idx: int) -> void:
 	selected = (idx + Inventory.HOTBAR) % Inventory.HOTBAR
@@ -708,8 +755,8 @@ func _build_viewmodel() -> void:
 	grip.add_child(m)
 	var box := _merged_aabb(m)
 	var longest := maxf(box.size.x, maxf(box.size.y, box.size.z))
-	# The pickaxe is shown as the biggest weapon we have (the maul) and held large.
-	var target := 0.66 if cat == "pickaxe" else 0.28
+	# The pickaxe (the mining tool) is held extra-large so the new model reads boldly in view.
+	var target := 0.85 if cat == "pickaxe" else 0.28
 	var s := target / longest if longest > 0.0001 else 1.0
 	m.scale = Vector3(s, s, s)
 	# Offset along the weapon's longest axis so the handle runs down toward the lower-right
@@ -730,7 +777,7 @@ func _build_viewmodel() -> void:
 func _build_fp_arm(root: Node3D) -> void:
 	const FP_ARM_PATH := "res://assets/models/characters/fp_hand.glb"
 	const FP_ARM_POS := Vector3(0.07, -0.05, 0.07)
-	const FP_ARM_ROT := Vector3(6.0, 214.0, 10.0)
+	const FP_ARM_ROT := Vector3(6.0, 34.0, 10.0)   # was 214° (fist faced the camera); flipped ~180° to point away
 	const FP_ARM_SIZE := 0.30
 	if not ResourceLoader.exists(FP_ARM_PATH):
 		return
@@ -976,7 +1023,20 @@ func _physics_process(delta: float) -> void:
 	_update_camera_feel(delta, sprinting and not flying, on_floor)
 	_update_vitals(delta, dir.length() > 0.5, sprinting)
 
+	_atmo_t -= delta                       # gate ambient dust by surroundings (throttled — get_block scan)
+	if _atmo_t <= 0.0:
+		_atmo_t = 0.5
+		_atmo_blocked = _compute_atmo_blocked()
+		if _dust_motes and is_instance_valid(_dust_motes):
+			_dust_motes.emitting = not _atmo_blocked
+
 	if global_position.y < VOID_Y:
+		# A void plunge restores you (no death screen) — but give it a real beat, not a silent teleport.
+		_play_snd(snd_death)
+		add_trauma(0.6)
+		get_tree().call_group("ducker", "duck", 0.8, 1.0)
+		if hud and hud.has_method("flash_damage"):
+			hud.flash_damage()
 		health = max_health
 		_respawn()
 		_update_hud()
@@ -1137,6 +1197,8 @@ func _update_vitals(delta: float, moving: bool, sprinting: bool) -> void:
 		if hunger >= MAX_HUNGER * 0.6 and health < max_health and _regen_block <= 0.0:
 			health += 1
 			_update_hud()
+			if hud and hud.has_method("flash_heal"):
+				hud.flash_heal()
 		elif hunger <= 0.0 and health > 0:
 			health -= 1                      # starvation is now lethal — there are real stakes
 			_play_snd(snd_hurt)
@@ -1243,7 +1305,7 @@ func _mine_terrain() -> void:
 	_mine_progress += get_physics_process_delta_time() / ttb
 	if _swing_cd <= 0.0:               # periodic swing feedback while mining
 		_swing_cd = 0.35
-		if mine_anim != "": _mine_timer = 0.3
+		if mine_anim != "": _mine_timer = 0.45   # > swing interval (0.35) so the looping mine clip plays smoothly, no idle-flicker between swings
 		_play_snd(snd_swing)
 		_weapon_swing(0.35)
 	if hud: hud.set_mine_progress(_mine_progress)

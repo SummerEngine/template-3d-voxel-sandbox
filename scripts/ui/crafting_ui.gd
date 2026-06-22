@@ -30,11 +30,11 @@ const RECIPES := [
 	{"cat": "Smelt",    "in": [[VoxelTypes.GOLD_ORE, 1], [VoxelTypes.COAL, 1]], "out_id": VoxelTypes.GOLD_INGOT, "out_n": 1},
 	{"cat": "Smelt",    "in": [[VoxelTypes.RAW_MEAT, 1], [VoxelTypes.COAL, 1]], "out_id": VoxelTypes.COOKED_MEAT, "out_n": 1},
 	# Tools (kind "tool" -> unlock + equip on the player). out_id = representative colour.
-	{"cat": "Tools", "kind": "tool", "tool": "Wooden Hammer",  "out_name": "Wooden Hammer",  "out_id": VoxelTypes.PLANKS,      "in": [[VoxelTypes.PLANKS, 3], [VoxelTypes.STICK, 2]]},
-	{"cat": "Tools", "kind": "tool", "tool": "Stone Hammer",   "out_name": "Stone Hammer",   "out_id": VoxelTypes.COBBLESTONE, "in": [[VoxelTypes.COBBLESTONE, 3], [VoxelTypes.STICK, 2]]},
-	{"cat": "Tools", "kind": "tool", "tool": "Iron Hammer",    "out_name": "Iron Hammer",    "out_id": VoxelTypes.IRON_INGOT,  "in": [[VoxelTypes.IRON_INGOT, 3], [VoxelTypes.STICK, 2]]},
-	{"cat": "Tools", "kind": "tool", "tool": "Diamond Hammer", "out_name": "Diamond Hammer", "out_id": VoxelTypes.DIAMOND,     "in": [[VoxelTypes.DIAMOND, 3], [VoxelTypes.STICK, 2]]},
-	{"cat": "Tools", "kind": "tool", "tool": "Gold Hammer",    "out_name": "Gold Hammer",    "out_id": VoxelTypes.GOLD_INGOT,  "in": [[VoxelTypes.GOLD_INGOT, 3], [VoxelTypes.STICK, 2]]},
+	{"cat": "Tools", "kind": "tool", "tool": "Wooden Pickaxe",  "out_name": "Wooden Pickaxe",  "out_id": VoxelTypes.PLANKS,      "in": [[VoxelTypes.PLANKS, 3], [VoxelTypes.STICK, 2]]},
+	{"cat": "Tools", "kind": "tool", "tool": "Stone Pickaxe",   "out_name": "Stone Pickaxe",   "out_id": VoxelTypes.COBBLESTONE, "in": [[VoxelTypes.COBBLESTONE, 3], [VoxelTypes.STICK, 2]]},
+	{"cat": "Tools", "kind": "tool", "tool": "Iron Pickaxe",    "out_name": "Iron Pickaxe",    "out_id": VoxelTypes.IRON_INGOT,  "in": [[VoxelTypes.IRON_INGOT, 3], [VoxelTypes.STICK, 2]]},
+	{"cat": "Tools", "kind": "tool", "tool": "Diamond Pickaxe", "out_name": "Diamond Pickaxe", "out_id": VoxelTypes.DIAMOND,     "in": [[VoxelTypes.DIAMOND, 3], [VoxelTypes.STICK, 2]]},
+	{"cat": "Tools", "kind": "tool", "tool": "Gold Pickaxe",    "out_name": "Gold Pickaxe",    "out_id": VoxelTypes.GOLD_INGOT,  "in": [[VoxelTypes.GOLD_INGOT, 3], [VoxelTypes.STICK, 2]]},
 	{"cat": "Tools", "kind": "tool", "tool": "Wooden Sword",    "out_name": "Wooden Sword",    "out_id": VoxelTypes.PLANKS,      "in": [[VoxelTypes.PLANKS, 2], [VoxelTypes.STICK, 1]]},
 	{"cat": "Tools", "kind": "tool", "tool": "Stone Sword",     "out_name": "Stone Sword",     "out_id": VoxelTypes.COBBLESTONE, "in": [[VoxelTypes.COBBLESTONE, 2], [VoxelTypes.STICK, 1]]},
 	{"cat": "Tools", "kind": "tool", "tool": "Iron Sword",      "out_name": "Iron Sword",      "out_id": VoxelTypes.IRON_INGOT,  "in": [[VoxelTypes.IRON_INGOT, 2], [VoxelTypes.STICK, 1]]},
@@ -56,8 +56,8 @@ const CONTEXT_CATS := {
 	"furnace": ["Smelt"],
 }
 const CONTEXT_TITLE := {
-	"hand":    "INVENTORY  &  CRAFTING",
-	"table":   "CRAFTING  TABLE",
+	"hand":    "CRAFTING",
+	"table":   "CRAFTING TABLE",
 	"furnace": "FURNACE",
 }
 
@@ -127,12 +127,12 @@ func _build() -> void:
 	frame.add_child(vb)
 
 	_title = Label.new()
-	_title.text = "INVENTORY  &  CRAFTING"
+	_title.text = "CRAFTING"
 	_title.add_theme_font_size_override("font_size", 28)
 	_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(_title)
 
-	vb.add_child(_subheading("Materials"))
+	vb.add_child(_subheading("Your Materials"))
 	var grid_center := HBoxContainer.new()
 	grid_center.alignment = BoxContainer.ALIGNMENT_CENTER
 	vb.add_child(grid_center)
@@ -175,7 +175,7 @@ func _build() -> void:
 		_cat_sections[cat] = {"header": header, "rows": row_nodes}
 
 	var hint := Label.new()
-	hint.text = "Press C to close"
+	hint.text = "Each row: ingredients  →  what you craft.   A red count = you're missing some.   Press C to close."
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.modulate = Color(1, 1, 1, 0.6)
 	vb.add_child(hint)
@@ -221,6 +221,8 @@ func _make_swatch(size: int) -> Dictionary:
 	panel.add_child(icon)
 	var count := Label.new()
 	count.add_theme_font_size_override("font_size", 13)
+	count.add_theme_constant_override("outline_size", 3)   # legible over bright swatches/icons
+	count.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 	count.position = Vector2(size - 20, size - 20)
 	count.mouse_filter = Control.MOUSE_FILTER_PASS
 	panel.add_child(count)
@@ -233,6 +235,7 @@ func _build_recipe_row(idx: int) -> Control:
 
 	# Input swatches with "+" between them.
 	var inputs: Array = r.in
+	var in_cells: Array = []                  # tracked so _refresh can colour each by have/need
 	for j in range(inputs.size()):
 		if j > 0:
 			var plus := Label.new()
@@ -247,6 +250,7 @@ func _build_recipe_row(idx: int) -> Control:
 		cell.count.text = str(int(ing[1]))
 		cell.panel.tooltip_text = "%d %s" % [int(ing[1]), VoxelTypes.name_of(int(ing[0]))]
 		row.add_child(cell.panel)
+		in_cells.append({"count": cell.count, "panel": cell.panel, "id": int(ing[0]), "need": int(ing[1])})
 
 	var arrow := Label.new()
 	arrow.text = "→"
@@ -271,7 +275,7 @@ func _build_recipe_row(idx: int) -> Control:
 	btn.pressed.connect(_craft.bind(idx))
 	row.add_child(btn)
 
-	_recipe_rows.append({"btn": btn, "idx": idx, "row": row})
+	_recipe_rows.append({"btn": btn, "idx": idx, "row": row, "inputs": in_cells})
 	return row
 
 ## True if the inventory holds every input of a recipe.
@@ -323,6 +327,12 @@ func _refresh() -> void:
 		rr.btn.disabled = owned or not afford
 		rr.btn.text = "Owned" if owned else "Craft"
 		rr.btn.tooltip_text = "%s → %d %s" % [_inputs_label(r), int(r.get("out_n", 1)), _out_name(r)]
+		# Colour each ingredient green (you have enough) or red (missing some) so it's obvious at a
+		# glance what a recipe still needs, and spell it out in the tooltip.
+		for inp in rr.get("inputs", []):
+			var have: int = player.inventory.total(int(inp.id))
+			inp.count.modulate = Color(0.6, 1.0, 0.6) if have >= int(inp.need) else Color(1.0, 0.5, 0.45)
+			inp.panel.tooltip_text = "%s — have %d, need %d" % [VoxelTypes.name_of(int(inp.id)), have, int(inp.need)]
 
 func _craft(idx: int) -> void:
 	if player == null:
@@ -362,6 +372,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			toggle()
 			get_viewport().set_input_as_handled()
 
+func is_open() -> bool:
+	return open
+
 func toggle() -> void:
 	if open:
 		close()
@@ -387,7 +400,7 @@ func open_for(ctx: String) -> void:
 
 func _set_title() -> void:
 	if _title:
-		_title.text = String(CONTEXT_TITLE.get(_context, "INVENTORY  &  CRAFTING"))
+		_title.text = String(CONTEXT_TITLE.get(_context, "CRAFTING"))
 
 ## Show only the recipe categories the current context allows.
 func _apply_context() -> void:

@@ -9,6 +9,8 @@ extends CharacterBody3D
 const SPEED := 2.0
 const FLEE_SPEED := 4.5
 const ANIMAL_YAW := PI                 # model art-forward vs Godot -Z forward
+const SEP_RADIUS := 1.4                # mobs closer than this gently push apart (no stacking/floating)
+const SEP_PUSH := 0.9                  # gentle spread — enough to unstack, not enough to shove off ledges
 const MODELS := [
 	"res://assets/models/animals/cow.glb",
 	"res://assets/models/animals/pig.glb",
@@ -35,6 +37,8 @@ var _dying := false                    # frozen while the death topple plays
 var _voice_path := "res://assets/audio/sfx/fauna/moo.mp3"   # species call, set when the model is picked
 var _voice_pitch := 1.0                # per-animal register so they don't all sound identical
 var _snd: AudioStreamPlayer3D          # plays the species call on hurt + (lower) on death
+var _sep := Vector3.ZERO               # steer-apart from nearby mobs (so a herd fans out, never stacks)
+var _sep_t := 0.0
 
 func set_color(c: Color) -> void:
 	_pending_color = c
@@ -270,11 +274,17 @@ func _physics_process(delta: float) -> void:
 		velocity.y -= gravity * delta
 	else:
 		velocity.y = 0.0
-		if is_on_wall() and _dir.length() > 0.1:
-			velocity.y = 4.5            # hop over a 1-block step instead of getting stuck
+		if is_on_wall() and _dir.length() > 0.1 and _can_step_up():
+			velocity.y = 4.5            # hop a 1-block step — NOT a taller wall (that just bounces = "floating")
+	# Steer apart from nearby mobs (throttled) so a clustered spawn fans out instead of piling
+	# up and riding onto each other's colliders (which is what made them look like they float).
+	_sep_t -= delta
+	if _sep_t <= 0.0:
+		_sep_t = 0.2
+		_compute_separation()
 	var spd := FLEE_SPEED if _flee > 0.0 else SPEED
-	velocity.x = _dir.x * spd
-	velocity.z = _dir.z * spd
+	velocity.x = _dir.x * spd + _sep.x
+	velocity.z = _dir.z * spd + _sep.z
 
 	if _dir.length() > 0.1:
 		look_at(global_position + Vector3(_dir.x, 0.0, _dir.z), Vector3.UP)
@@ -285,13 +295,51 @@ func _physics_process(delta: float) -> void:
 	if global_position.y < -10.0:
 		queue_free()
 
+## Accumulate a push away from up to a few nearby mobs (shares the "mob" group with zombies +
+## fauna), so a herd spreads into a loose cluster instead of stacking on one point. Throttled
+## and capped, so it stays cheap. This is what keeps animals from riding up onto each other.
+func _compute_separation() -> void:
+	_sep = Vector3.ZERO
+	var count := 0
+	for m in get_tree().get_nodes_in_group("mob"):
+		if m == self or not is_instance_valid(m):
+			continue
+		var d: Vector3 = global_position - (m as Node3D).global_position
+		d.y = 0.0
+		var dist := d.length()
+		if dist > 0.05 and dist < SEP_RADIUS:
+			_sep += d / dist * (SEP_RADIUS - dist)   # closer neighbours push harder
+			count += 1
+			if count >= 6:
+				break
+	if _sep.length() > 0.001:
+		_sep = _sep.normalized() * SEP_PUSH
+
 func _pick_dir() -> void:
-	_timer = _rng.randf_range(1.5, 4.0)
-	if _rng.randf() < 0.3:
+	_timer = _rng.randf_range(2.0, 5.0)
+	if _rng.randf() < 0.15:                 # mostly keep roaming; only occasionally graze in place
 		_dir = Vector3.ZERO
 	else:
 		var a := _rng.randf_range(0.0, TAU)
 		_dir = Vector3(cos(a), 0.0, sin(a))
+
+func _solid_at(x: int, y: int, z: int) -> bool:
+	if world == null:
+		return false
+	var id: int = world.get_block(x, y, z)
+	return id != VoxelTypes.AIR and id != VoxelTypes.WATER
+
+## True only when a single solid block blocks the path at foot height with clear space above it —
+## a climbable 1-block step. Stops the animal from hopping endlessly against a 2+ high wall (which
+## reads as bouncing / floating in place).
+func _can_step_up() -> bool:
+	if world == null or _dir.length() < 0.1:
+		return false
+	var ahead := global_position + Vector3(_dir.x, 0.0, _dir.z).normalized() * 0.7
+	var sx := floori(ahead.x)
+	var sz := floori(ahead.z)
+	var fy := floori(global_position.y + 0.1)
+	return _solid_at(sx, fy, sz) and not _solid_at(sx, fy + 1, sz)
 
 ## Turn away from water and steep drops so the animal stays on land.
 func _avoid_hazards() -> void:
@@ -302,9 +350,12 @@ func _avoid_hazards() -> void:
 	var gz := floori(ahead.z)
 	var sh: int = world.surface_height(gx, gz)
 	if sh < int(world.SEA_LEVEL) or float(sh) < global_position.y - 2.0:
-		var a := atan2(_dir.x, _dir.z) + PI + _rng.randf_range(-0.7, 0.7)
+		# Skirt the hazard with a ~90° turn instead of reversing straight back, so animals follow
+		# coastlines and ledges and keep exploring rather than ping-ponging in one little box.
+		var turn := (PI * 0.5 + _rng.randf_range(-0.5, 0.5)) * (1.0 if _rng.randf() < 0.5 else -1.0)
+		var a := atan2(_dir.x, _dir.z) + turn
 		_dir = Vector3(sin(a), 0.0, cos(a))
-		_timer = _rng.randf_range(1.0, 2.0)
+		_timer = _rng.randf_range(1.2, 2.5)
 
 ## Procedural walk cycle: a speed-synced vertical bob + side-to-side waddle so the
 ## static animal model reads as walking (it has no skeleton to animate). Eases back

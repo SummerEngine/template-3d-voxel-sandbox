@@ -357,11 +357,18 @@ func _update_lightning(delta: float) -> void:
 		var tw := create_tween()
 		tw.tween_property(_flash_rect, "color:a", 0.0, 0.5)
 		if _snd_thunder and _snd_thunder.stream:
-			_snd_thunder.play()
+			var tw_t := create_tween()           # thunder lags the flash — that gap reads as distance
+			tw_t.tween_interval(randf_range(0.4, 1.8))
+			tw_t.tween_callback(_snd_thunder.play)
 
+var _label_cache := ""
 func _apply_label() -> void:
-	if _label:
-		_label.text = "%s  ·  %s" % [SEASON_NAMES[season], _condition_text()]
+	if not _label:
+		return
+	var t := "%s  ·  %s" % [SEASON_NAMES[season], _condition_text()]
+	if t != _label_cache:                        # runs every frame; only touch the Label when it changes
+		_label_cache = t
+		_label.text = t
 
 func _condition_text() -> String:
 	match weather:

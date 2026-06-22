@@ -17,10 +17,11 @@ const MODEL_PATHS := [
 	"res://assets/models/mobs/zombie.glb",        # armoured/mech zombie (T-pose, hunched to hide it)
 ]
 const SPEED := 2.4
-const CHASE_SPEED := 4.2          # a touch faster than a walk — you can't just stroll away
+const CHASE_SPEED := 3.8          # below the player's 5.0 walk — you can back away while fighting
 const SIGHT_RANGE := 20.0
 const ATTACK_RANGE := 1.6
-const ATTACK_CD := 1.0
+const ATTACK_CD := 1.3            # slower swings — less burst damage in a pile-up
+const ATTACK_WINDUP := 0.45       # brief telegraph before the FIRST hit on contact (no instant ambush)
 const DAMAGE := 1
 const SEP_RADIUS := 2.0           # mobs closer than this push apart so the horde spreads, not stacks
 const SEP_PUSH := 3.6             # strong enough to compete with the chase pull and form a loose ring
@@ -71,6 +72,7 @@ var _speed_mul := 1.0                   # per-type chase speed multiplier (brute
 var _knockback := Vector3.ZERO          # decaying shove from a player hit
 var _sep := Vector3.ZERO                # steer-apart from nearby mobs (recomputed on a throttle)
 var _sep_t := 0.0
+var _in_range := false                  # in attack range last frame — drives the first-hit wind-up
 var _burning := false                   # caught in daylight: smoking, ticking damage, about to drop
 var _burn_t := 0.0
 var _burn_dmg_t := 0.0
@@ -85,7 +87,7 @@ func _ready() -> void:
 		_speed_mul = 0.6           # heavy and slow — you can outrun it, not ignore it
 	elif runner:
 		_size = 0.95               # lean and wiry
-		_speed_mul = 1.45          # sprints — it closes the gap fast
+		_speed_mul = 1.3           # quick — roughly walk pace, but you can still sprint clear of it
 
 	_col = CollisionShape3D.new()
 	var cap := CapsuleShape3D.new()
@@ -418,6 +420,10 @@ func ignite() -> void:
 	_burn_t = 0.0
 	_burn_dmg_t = 0.4
 	_spawn_fire_vfx()
+	# A low searing whoosh as it catches — staggered per-mob, a burning horde crescendos at dawn.
+	if _snd_hurt and _snd_hurt.stream and not _snd_hurt.playing:
+		_snd_hurt.pitch_scale = _voice_pitch * _rng.randf_range(0.7, 0.85)
+		_snd_hurt.play()
 
 func _burn_tick(delta: float) -> void:
 	_burn_t += delta
@@ -556,20 +562,28 @@ func _physics_process(delta: float) -> void:
 			chasing = true
 			if dist > 0.05:
 				_dir = flat.normalized()
-			if dist < ATTACK_RANGE and absf(to.y) < 1.6 and _attack_cd <= 0.0:
-				_attack_cd = ATTACK_CD
-				_punch = 1.0                       # procedural-rig lunge
-				_attacking = true                  # rigged-model: trigger the attack clip
-				if _snd_attack and _snd_attack.stream:
-					_snd_attack.pitch_scale = _voice_pitch * _rng.randf_range(0.95, 1.05)
-					_snd_attack.play()
-				if player.has_method("hurt"):
-					player.hurt(damage)
-					if player.has_method("push"):
-						var kb := Vector3(to.x, 0.0, to.z).normalized()   # shove the player back
-						player.push(kb * (7.0 if brute else 4.0) + Vector3.UP * 1.5)
+			if dist < ATTACK_RANGE and absf(to.y) < 1.6:
+				if not _in_range:
+					_in_range = true               # just reached the player — wind up, don't hit instantly
+					if _attack_cd < ATTACK_WINDUP:
+						_attack_cd = ATTACK_WINDUP
+				elif _attack_cd <= 0.0:
+					_attack_cd = ATTACK_CD
+					_punch = 1.0                       # procedural-rig lunge
+					_attacking = true                  # rigged-model: trigger the attack clip
+					if _snd_attack and _snd_attack.stream:
+						_snd_attack.pitch_scale = _voice_pitch * _rng.randf_range(0.95, 1.05)
+						_snd_attack.play()
+					if player.has_method("hurt"):
+						player.hurt(damage)
+						if player.has_method("push"):
+							var kb := Vector3(to.x, 0.0, to.z).normalized()   # shove the player back
+							player.push(kb * (5.0 if brute else 3.0) + Vector3.UP * 1.2)
+			else:
+				_in_range = false                  # left range — next contact gets a fresh wind-up
 
 	if not chasing:
+		_in_range = false              # out of sight — a fresh approach earns a new first-hit wind-up
 		_timer -= delta
 		if _timer <= 0.0:
 			_pick_dir()

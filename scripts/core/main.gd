@@ -323,6 +323,8 @@ func _on_phase_changed(is_night: bool) -> void:
 			day_night.blood_moon = false
 		_nights += 1
 		if player:
+			if player.has_method("play_dawn_sound"):
+				player.play_dawn_sound()   # birdsong relief beat at sunrise
 			if player.has_signal("night_survived"):
 				player.emit_signal("night_survived")
 			if player.hud and player.hud.has_method("show_toast"):
@@ -345,7 +347,7 @@ func _spawn_hostiles(n: int, blood := false) -> void:
 			"brute": is_brute,
 			"runner": is_runner,
 			"hp": (10 + bonus_hp) * (3 if is_brute else 1) - (4 if is_runner else 0),  # runners are frail
-			"dmg": (2 + bonus_dmg) + (3 if is_brute else 0),
+			"dmg": (1 + bonus_dmg) + (2 if is_brute else 0),   # toned down — zombies were too punishing
 		})
 
 ## Instantiate one queued siege mob around the player's CURRENT position (so a staggered spawn
