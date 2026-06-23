@@ -149,6 +149,18 @@ func _build_settings() -> void:
 	list.add_child(UITheme.setting_row("Look speed", 0.3, 2.5, 0.05, GameSettings.sensitivity, dec, _on_sens))
 	list.add_child(UITheme.setting_row("View distance", 2, 8, 1, GameSettings.render_radius, whole, _on_render))
 
+	# "Eerie events" — the world-unease systems (mirages, blind-spot edits). Ships on; can be silenced.
+	var unease_cb := CheckButton.new()
+	unease_cb.text = "Eerie events"
+	unease_cb.button_pressed = GameSettings.world_unease
+	unease_cb.tooltip_text = "The world sometimes plays tricks on you — mirages in storms, things shifting when unseen."
+	unease_cb.add_theme_color_override("font_color", Color(1, 1, 1))
+	unease_cb.toggled.connect(func(v: bool) -> void:
+		GameSettings.world_unease = v
+		GameSettings.save_cfg()
+		_play_click())
+	list.add_child(unease_cb)
+
 	var ctl := Label.new()
 	ctl.text = "Controls  (click a key, then press the new one)"
 	ctl.add_theme_font_size_override("font_size", 20)
@@ -260,8 +272,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif player and player.has_method("is_dead") and player.is_dead():
 			pass                                     # dead: the death screen + R own the input, don't pause over it
 		else:
+			var cu = get_tree().get_first_node_in_group("crafting_ui")
 			var c = get_tree().get_first_node_in_group("chest_ui")
-			if c and c.has_method("is_open") and c.is_open():
+			if cu and cu.has_method("is_open") and cu.is_open():
+				cu.close()                           # first Esc closes crafting (was falling through to pause)
+			elif c and c.has_method("is_open") and c.is_open():
 				c.close()                            # first Esc closes an open chest
 			else:
 				_pause()

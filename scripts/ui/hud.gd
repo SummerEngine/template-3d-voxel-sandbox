@@ -40,6 +40,13 @@ var _fps: Label
 var _fps_accum := 0.0
 var _toast: Label
 var _toast_tw: Tween
+var _hitmark: Label              # brief red "x" when an attack lands on a mob
+var _prev_sel := -1              # last hotbar selection, to pulse + tick on change
+var _snd_tick: AudioStreamPlayer # dedicated soft tick for hotbar scrolling
+var _blood_vig: TextureRect      # pulsing red edge-vignette during a blood moon
+var _blood_on := false
+var _blood_phase := 0.0
+var _time_label: Label           # persistent "Day N" / "Night N" readout
 
 func _ready() -> void:
 	layer = 5
@@ -52,6 +59,14 @@ func _ready() -> void:
 	if AudioServer.get_bus_index("SFX") != -1:
 		_snd_click.bus = "SFX"
 	add_child(_snd_click)
+	_snd_tick = AudioStreamPlayer.new()
+	if ResourceLoader.exists("res://assets/audio/sfx/ui/click.mp3"):
+		_snd_tick.stream = load("res://assets/audio/sfx/ui/click.mp3")
+	_snd_tick.volume_db = -16.0
+	_snd_tick.pitch_scale = 1.5
+	if AudioServer.get_bus_index("SFX") != -1:
+		_snd_tick.bus = "SFX"
+	add_child(_snd_tick)
 	get_viewport().size_changed.connect(_layout)
 	_layout()
 
@@ -84,6 +99,25 @@ func _toggle_controls() -> void:
 	if _controls_hint:
 		_controls_hint.visible = not _controls.visible
 	_center_controls()
+
+## On a fresh world, fade the full controls panel out after a grace period (leaving the "H — Controls"
+## chip), so first-timers get the guide but it doesn't clutter the screen forever. H still toggles it.
+func auto_retire_controls() -> void:
+	if _controls == null:
+		return
+	get_tree().create_timer(13.0).timeout.connect(_retire_controls)
+
+func _retire_controls() -> void:
+	if _controls == null or not _controls.visible:
+		return                                    # already hidden (player pressed H) — leave it
+	var tw := create_tween()
+	tw.tween_property(_controls, "modulate:a", 0.0, 1.2)
+	tw.tween_callback(func() -> void:
+		_controls.visible = false
+		_controls.modulate.a = 1.0
+		if _controls_hint:
+			_controls_hint.visible = true
+		_center_controls())
 
 func _build_styles() -> void:
 	_style_normal = StyleBoxFlat.new()
@@ -134,11 +168,43 @@ func _build() -> void:
 	_vignette.modulate = Color(1, 1, 1, 0.0)
 	add_child(_vignette)
 
+	# Blood-moon vignette: a deep-red edge pulse that breathes through siege nights (composes on
+	# top of the low-health vignette). Driven by set_blood_moon() + _update_vignette().
+	_blood_vig = TextureRect.new()
+	var bgrad := Gradient.new()
+	bgrad.set_offset(0, 0.30)
+	bgrad.set_color(0, Color(0.5, 0.0, 0.0, 0.0))
+	bgrad.set_offset(1, 1.0)
+	bgrad.set_color(1, Color(0.42, 0.0, 0.02, 1.0))
+	var btex := GradientTexture2D.new()
+	btex.gradient = bgrad
+	btex.fill = GradientTexture2D.FILL_RADIAL
+	btex.fill_from = Vector2(0.5, 0.5)
+	btex.fill_to = Vector2(0.5, 1.0)
+	btex.width = 256
+	btex.height = 256
+	_blood_vig.texture = btex
+	_blood_vig.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_blood_vig.stretch_mode = TextureRect.STRETCH_SCALE
+	_blood_vig.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_blood_vig.modulate = Color(1, 1, 1, 0.0)
+	add_child(_blood_vig)
+
 	_cross = Label.new()
 	_cross.text = "+"
 	_cross.add_theme_font_size_override("font_size", 22)
+	_cross.modulate = Color(1, 1, 1, 0.55)        # dim until something is in reach (set_crosshair_state)
 	_outline(_cross, 3)
 	add_child(_cross)
+
+	# Hit-marker: a brief red "x" over the crosshair when an attack connects with a mob.
+	_hitmark = Label.new()
+	_hitmark.text = "✕"
+	_hitmark.add_theme_font_size_override("font_size", 26)
+	_hitmark.modulate = Color(1, 1, 1, 0)
+	_hitmark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_outline(_hitmark, 3)
+	add_child(_hitmark)
 
 	_mine_bg = ColorRect.new()
 	_mine_bg.color = Color(0, 0, 0, 0.6)
@@ -177,6 +243,15 @@ func _build() -> void:
 	_outline(_armor)
 	add_child(_armor)
 
+	# Persistent day/night readout (the fading toast alone wasn't enough to track the night number,
+	# which drives escalating difficulty + the every-5th-night blood moon).
+	_time_label = Label.new()
+	_time_label.position = Vector2(16, 126)
+	_time_label.add_theme_font_size_override("font_size", 16)
+	_time_label.modulate = Color(0.95, 0.95, 0.82)
+	_outline(_time_label)
+	add_child(_time_label)
+
 	_block_name = Label.new()
 	_block_name.add_theme_font_size_override("font_size", 18)
 	_block_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -210,8 +285,8 @@ func _build() -> void:
 		key.text = str(i + 1)
 		key.add_theme_font_size_override("font_size", 11)
 		key.position = Vector2(4, 2)
-		key.modulate = Color(1, 1, 1, 0.5)
-		_outline(key, 2)
+		key.modulate = Color(1, 1, 1, 0.8)        # brighter so the 1-9 hint reads over bright terrain
+		_outline(key, 3)
 		panel.add_child(key)
 		_hotbar.add_child(panel)
 		_slots.append({"panel": panel, "swatch": swatch, "icon": icon, "count": count})
@@ -379,7 +454,12 @@ func _layout() -> void:
 	if _vignette:
 		_vignette.position = Vector2.ZERO
 		_vignette.size = vp
+	if _blood_vig:
+		_blood_vig.position = Vector2.ZERO
+		_blood_vig.size = vp
 	_cross.position = Vector2(vp.x * 0.5 - 6, vp.y * 0.5 - 16)
+	if _hitmark:
+		_hitmark.position = Vector2(vp.x * 0.5 - 9, vp.y * 0.5 - 18)
 	_mine_bg.position = Vector2(vp.x * 0.5 - 32, vp.y * 0.5 + 16)
 	_mine_fill.position = _mine_bg.position
 	var total_w := Inventory.HOTBAR * SLOT + (Inventory.HOTBAR - 1) * SLOT_PAD
@@ -434,6 +514,43 @@ func hide_death() -> void:
 	for n in [_death_dim, _death_title, _death_sub, _respawn_btn]:
 		n.visible = false
 
+## Crosshair reach feedback: 0 = nothing in reach (dim), 1 = a reachable block, 2 = a mob (red).
+func set_crosshair_state(s: int) -> void:
+	if _cross == null:
+		return
+	match s:
+		2: _cross.modulate = Color(1.0, 0.45, 0.4, 1.0)
+		1: _cross.modulate = Color(1, 1, 1, 1.0)
+		_: _cross.modulate = Color(1, 1, 1, 0.5)
+
+## A brief red "x" over the crosshair when an attack lands on a mob.
+func hit_marker() -> void:
+	if _hitmark == null:
+		return
+	_hitmark.modulate = Color(1.0, 0.35, 0.3, 1.0)
+	var tw := create_tween()
+	tw.tween_property(_hitmark, "modulate:a", 0.0, 0.22)
+
+## Turn the breathing blood-moon vignette on/off (driven by main on the night phase change).
+func set_blood_moon(on: bool) -> void:
+	_blood_on = on
+	if not on and _blood_vig:
+		_blood_phase = 0.0
+
+## Persistent day/night readout under the vitals.
+func set_time_state(is_night: bool, n: int, blood: bool) -> void:
+	if _time_label == null:
+		return
+	if blood:
+		_time_label.text = "Night %d  ·  BLOOD MOON" % n
+		_time_label.modulate = Color(1.0, 0.4, 0.35)
+	elif is_night:
+		_time_label.text = "Night %d" % n
+		_time_label.modulate = Color(0.72, 0.8, 1.0)
+	else:
+		_time_label.text = "Day %d" % maxi(1, n)
+		_time_label.modulate = Color(0.95, 0.95, 0.82)
+
 ## Brief red screen flash when the player takes damage.
 func flash_damage() -> void:
 	if _dmg_flash == null:
@@ -452,6 +569,13 @@ func _update_vignette(delta: float) -> void:
 		_low_phase += delta * 3.2
 		target = _low_intensity * (0.45 + 0.55 * absf(sin(_low_phase)))   # breathe between dim and full
 	_vignette.modulate.a = move_toward(_vignette.modulate.a, target, delta * 2.2)
+	# Blood-moon edge pulse (composes over the low-health one).
+	if _blood_vig:
+		var bt := 0.0
+		if _blood_on:
+			_blood_phase += delta * 1.2
+			bt = 0.16 + 0.12 * absf(sin(_blood_phase))
+		_blood_vig.modulate.a = move_toward(_blood_vig.modulate.a, bt, delta * 1.0)
 
 func set_health(h: int, max_h: int) -> void:
 	if _hearts == null: return
@@ -511,6 +635,12 @@ func update_hotbar(slots: Array, selected: int) -> void:
 	var sel_id: int = slots[selected].id if selected >= 0 and selected < slots.size() else VoxelTypes.AIR
 	if _block_name:
 		_block_name.text = VoxelTypes.name_of(sel_id) if sel_id != VoxelTypes.AIR else ""
+	# Selection-change feedback: pulse the newly-selected slot + a soft tick (skip the first fill).
+	if _prev_sel != -1 and selected != _prev_sel and selected >= 0 and selected < _slots.size():
+		_pulse_slot(_slots[selected].panel)
+		if _snd_tick and _snd_tick.stream:
+			_snd_tick.play()
+	_prev_sel = selected
 
 ## A brief warm brighten of a hotbar slot when its stack grows — the "+1" pickup pop. Modulate
 ## only (not scale) so it never shifts the HBox layout.

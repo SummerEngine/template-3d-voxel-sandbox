@@ -45,6 +45,7 @@ var _rng := RandomNumberGenerator.new()
 var _flash_meshes: Array = []
 var _model: Node3D                     # visual root, lurched/swayed while shambling
 var _model_rest_y := 0.0               # its resting local height (feet on the ground)
+var _emerging := false                 # rising up out of the ground (blood-moon claw-up); freezes movement
 var _articulated := false              # true -> code-built blocky rig (swing limbs)
 var _anim_player: AnimationPlayer      # the rigged GLB's clip player (null -> procedural rig)
 var _clip_walk := ""
@@ -495,6 +496,17 @@ func take_damage(amount: int) -> void:
 
 ## Death: stop the AI, drop the collider so the corpse doesn't block, and topple the body
 ## over (rotate down + sink + shrink) before despawning — a beat of feedback for the kill.
+## Blood-moon claw-up: the body holds still while its visual model rises out of the ground, then
+## resumes normal shambling. Driven by main._spawn_clawup right after the dirt burst.
+func emerge() -> void:
+	if _model == null or not is_instance_valid(_model):
+		return
+	_emerging = true
+	_model.position.y = _model_rest_y - 1.8
+	var tw := create_tween()
+	tw.tween_property(_model, "position:y", _model_rest_y, 0.7).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_callback(func() -> void: _emerging = false)
+
 func _die() -> void:
 	if _dying:
 		return                            # already dying — never topple/drop/emit twice
@@ -511,6 +523,8 @@ func _die() -> void:
 	# shouldn't credit the player with kills they never made.
 	if not _burning and player and is_instance_valid(player) and player.has_signal("mob_killed"):
 		player.emit_signal("mob_killed")
+		if player.has_signal("mob_died_at"):
+			player.emit_signal("mob_died_at", global_position)   # Hauntfields: mark this kill spot
 	if _col:
 		_col.set_deferred("disabled", true)
 	if _model and is_instance_valid(_model):
@@ -528,6 +542,8 @@ func _die() -> void:
 func _physics_process(delta: float) -> void:
 	if _dying:
 		return                                  # frozen while the death topple tween plays
+	if _emerging:
+		return                                  # clawing up out of the ground — hold still until the tween ends
 	if _attack_cd > 0.0:
 		_attack_cd -= delta
 

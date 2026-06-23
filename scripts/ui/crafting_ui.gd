@@ -26,6 +26,8 @@ const RECIPES := [
 	{"cat": "Crafting", "in": [[VoxelTypes.STONE, 1]],       "out_id": VoxelTypes.POLISHED_STONE, "out_n": 1},
 	{"cat": "Crafting", "in": [[VoxelTypes.PLANKS, 2], [VoxelTypes.STICK, 2]], "out_id": VoxelTypes.HOE,   "out_n": 1},
 	{"cat": "Crafting", "in": [[VoxelTypes.WHEAT, 3]],       "out_id": VoxelTypes.BREAD,  "out_n": 1},
+	{"cat": "Crafting", "in": [[VoxelTypes.POLISHED_STONE, 4], [VoxelTypes.DIAMOND, 1]], "out_id": VoxelTypes.MONOLITH, "out_n": 1},
+	{"cat": "Crafting", "in": [[VoxelTypes.IRON_INGOT, 2], [VoxelTypes.DIAMOND, 1]],     "out_id": VoxelTypes.RESONATOR, "out_n": 1},
 	{"cat": "Smelt",    "in": [[VoxelTypes.IRON_ORE, 1], [VoxelTypes.COAL, 1]], "out_id": VoxelTypes.IRON_INGOT, "out_n": 1},
 	{"cat": "Smelt",    "in": [[VoxelTypes.GOLD_ORE, 1], [VoxelTypes.COAL, 1]], "out_id": VoxelTypes.GOLD_INGOT, "out_n": 1},
 	{"cat": "Smelt",    "in": [[VoxelTypes.RAW_MEAT, 1], [VoxelTypes.COAL, 1]], "out_id": VoxelTypes.COOKED_MEAT, "out_n": 1},
@@ -40,6 +42,7 @@ const RECIPES := [
 	{"cat": "Tools", "kind": "tool", "tool": "Iron Sword",      "out_name": "Iron Sword",      "out_id": VoxelTypes.IRON_INGOT,  "in": [[VoxelTypes.IRON_INGOT, 2], [VoxelTypes.STICK, 1]]},
 	{"cat": "Tools", "kind": "tool", "tool": "Diamond Sword",   "out_name": "Diamond Sword",   "out_id": VoxelTypes.DIAMOND,     "in": [[VoxelTypes.DIAMOND, 2], [VoxelTypes.STICK, 1]]},
 	{"cat": "Tools", "kind": "tool", "tool": "Gold Sword",      "out_name": "Gold Sword",      "out_id": VoxelTypes.GOLD_INGOT,  "in": [[VoxelTypes.GOLD_INGOT, 2], [VoxelTypes.STICK, 1]]},
+	{"cat": "Tools", "kind": "tool", "tool": "Reaper Scythe",   "out_name": "Reaper Scythe",   "out_id": VoxelTypes.IRON_INGOT,  "in": [[VoxelTypes.IRON_INGOT, 4], [VoxelTypes.STICK, 2]]},
 	# Armor (kind "armor" -> set the player's damage-reduction tier).
 	{"cat": "Armor", "kind": "armor", "armor": 1, "out_name": "Iron Armor",    "out_id": VoxelTypes.IRON_INGOT, "in": [[VoxelTypes.IRON_INGOT, 5]]},
 	{"cat": "Armor", "kind": "armor", "armor": 2, "out_name": "Diamond Armor", "out_id": VoxelTypes.DIAMOND,     "in": [[VoxelTypes.DIAMOND, 5]]},
@@ -67,6 +70,8 @@ var _cat_sections := {}     # cat -> {header, rows:[]}
 var player
 var _panel: Control
 var _toast: Label
+var _taught_resonator := false   # teach the new right-click verbs once, on first craft
+var _taught_monolith := false
 var _mat_slots: Array = []     # {panel, swatch, count} per inventory slot
 var _recipe_rows: Array = []   # {btn, idx}
 var _snd_click: AudioStreamPlayer
@@ -297,6 +302,10 @@ func _inputs_label(r: Dictionary) -> String:
 func _refresh() -> void:
 	if player == null:
 		return
+	# Auto-dismiss a stale "Need X" message once the player has gathered the missing items
+	# (the row turns green) — _refresh fires on every inventory change.
+	if _toast and _toast.text.begins_with("Need "):
+		_toast.text = ""
 	for i in range(_mat_slots.size()):
 		var s = player.inventory.slots[i]
 		var ui = _mat_slots[i]
@@ -358,6 +367,16 @@ func _craft(idx: int) -> void:
 			_toast.text = "Crafted %d %s" % [int(r.get("out_n", 1)), _out_name(r)]
 			if player.has_signal("item_crafted"):
 				player.emit_signal("item_crafted", int(r.out_id))
+			# Teach the new right-click verbs once (center toast — the panel's own _toast is local).
+			var oid := int(r.out_id)
+			if oid == VoxelTypes.RESONATOR and not _taught_resonator:
+				_taught_resonator = true
+				if player.hud and player.hud.has_method("show_toast"):
+					player.hud.show_toast("Resonator ready — hold it and right-click to echo-sound ore through rock.", Color(0.55, 0.85, 0.95))
+			elif oid == VoxelTypes.MONOLITH and not _taught_monolith:
+				_taught_monolith = true
+				if player.hud and player.hud.has_method("show_toast"):
+					player.hud.show_toast("Monolith ready — place it, then right-click it to read its Annals.", Color(0.82, 0.86, 1.0))
 	_play(_snd_click)
 	if player.has_method("on_inventory_changed"):
 		player.on_inventory_changed()

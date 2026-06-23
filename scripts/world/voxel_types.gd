@@ -37,7 +37,8 @@ const RED_BLOCK := 25
 const BLUE_BLOCK := 26
 const GREEN_BLOCK := 27
 const SNOW := 28
-const MAX_BLOCK := 28
+const MONOLITH := 29         # placeable monument; the world auto-engraves your deeds on it
+const MAX_BLOCK := 29
 
 # --- item ids (non-placeable: crafting materials, food, gems) ---
 const ITEM_BASE := 100
@@ -56,6 +57,7 @@ const HOE := 110              # tool: right-click dirt/grass to till it into far
 const WHEAT_SEEDS := 111      # plant on farmland; drops from breaking grass
 const WHEAT := 112            # harvested from a ripe crop; cook/craft into bread
 const BREAD := 113            # cooked food (high hunger restore)
+const RESONATOR := 114        # tool: right-click to echo-sound ore/caves through solid rock
 
 # Extra atlas tiles that aren't a block's main face: item icons (28-35) and the log
 # ring-top (36). Tile index = row*8 + col in the 8x8 atlas.
@@ -65,6 +67,7 @@ const TILE_WOOD_TOP := 36
 ## The original 16 blocks keep their cols 0-3 positions; added blocks live in cols 4-7.
 static func atlas_index(t: int) -> int:
 	match t:
+		MONOLITH: return 13   # reuse polished-stone face (reads as carved stone)
 		GRASS:          return 0
 		DIRT:           return 1
 		STONE:          return 2
@@ -107,6 +110,7 @@ static func face_atlas_index(t: int, d: int, _back: bool) -> int:
 ## crafting). Blocks show their main face tile; items have dedicated icon tiles.
 static func tile_index(id: int) -> int:
 	match id:
+		RESONATOR: return -1   # no atlas tile -> UI uses the colour swatch
 		STICK:       return 28
 		COAL:        return 29
 		IRON_INGOT:  return 30
@@ -132,6 +136,7 @@ static func is_item(id: int) -> bool:
 ## Seconds to break at mining_power 1.0. Negative = unbreakable.
 static func hardness(t: int) -> float:
 	match t:
+		MONOLITH: return 4.0   # a deliberate monument: slow to remove
 		LEAVES:      return 0.2
 		GLASS:       return 0.15
 		SNOW:        return 0.25
@@ -170,6 +175,8 @@ static func drop_of(t: int) -> int:
 
 static func name_of(id: int) -> String:
 	match id:
+		MONOLITH:    return "Monolith"
+		RESONATOR:   return "Resonator"
 		AIR:         return "Empty"
 		GRASS:       return "Grass"
 		DIRT:        return "Dirt"
@@ -229,6 +236,8 @@ static func food_value(id: int) -> int:
 ## Approximate solid colour for drops, break particles and hotbar swatches.
 static func color_of(id: int) -> Color:
 	match id:
+		MONOLITH:    return Color(0.30, 0.28, 0.34)
+		RESONATOR:   return Color(0.35, 0.85, 0.92)
 		GRASS:       return Color(0.36, 0.66, 0.30)
 		DIRT:        return Color(0.48, 0.34, 0.21)
 		STONE:       return Color(0.53, 0.53, 0.56)

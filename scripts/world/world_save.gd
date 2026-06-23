@@ -55,6 +55,52 @@ static func _tool_names(player) -> Array:
 		names.append(String(w.get("name", "")))
 	return names
 
+# --- world-memory collections (Hauntfields graves, Hollows pressure, Chronicle monoliths) ---
+static func _graves_data(world) -> Array:
+	var out: Array = []
+	for cell in world.graves.keys():
+		out.append([cell.x, cell.y, cell.z, int(world.graves[cell])])
+	return out
+
+static func graves_from(data: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for e in data.get("graves", []):
+		if e.size() >= 4:
+			out[Vector3i(int(e[0]), int(e[1]), int(e[2]))] = int(e[3])
+	return out
+
+static func hollows_from(data: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	var raw = data.get("hollows", {})
+	if raw is Dictionary:
+		for k in raw.keys():
+			out[String(k)] = int(raw[k])
+	return out
+
+static func hollow_calmed_from(data: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	var raw = data.get("hollow_calmed", {})
+	if raw is Dictionary:
+		for k in raw.keys():
+			out[String(k)] = true
+	return out
+
+static func _monoliths_data(world) -> Array:
+	var out: Array = []
+	for cell in world.monoliths.keys():
+		out.append([cell.x, cell.y, cell.z, world.monoliths[cell]])
+	return out
+
+static func monoliths_from(data: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for e in data.get("monoliths", []):
+		if e.size() >= 4 and e[3] is Array:
+			var lines: Array = []
+			for s in e[3]:
+				lines.append(String(s))
+			out[Vector3i(int(e[0]), int(e[1]), int(e[2]))] = lines
+	return out
+
 static func save(world, player, day_night, weather = null) -> bool:
 	var edits: Array = []
 	for k in world.overrides.keys():
@@ -79,6 +125,10 @@ static func save(world, player, day_night, weather = null) -> bool:
 		"torches": _torches_data(world),
 		"weather": weather.save_state() if weather else {},
 		"crops": player.farm.to_data() if player.farm != null else [],
+		"graves": _graves_data(world),
+		"hollows": world.hollow_scores.duplicate(),
+		"hollow_calmed": world.hollow_calmed.duplicate(),
+		"monoliths": _monoliths_data(world),
 	}
 	var f := FileAccess.open(PATH, FileAccess.WRITE)
 	if f == null:

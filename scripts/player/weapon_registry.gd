@@ -32,6 +32,7 @@ const WEAPONS := [
 	{"name": "Kris",             "file": "stiletto_wavy",    "category": "dagger",  "damage": 4,  "attack_speed": 2.5, "mining_power": 1.0, "desc": "A serpentine wavy-bladed kris that slips between armor with every thrust."},
 	{"name": "Round Stiletto",   "file": "stiletto_round",   "category": "dagger",  "damage": 4,  "attack_speed": 2.6, "mining_power": 1.0, "desc": "A smooth round-shaft stiletto made for quick, repeated jabs."},
 	{"name": "Sickle",           "file": "sickle",           "category": "sickle",  "damage": 6,  "attack_speed": 1.7, "mining_power": 1.1, "desc": "A hooked harvesting blade that reaps crops and careless enemies alike."},
+	{"name": "Reaper Scythe",    "file": "scythe",           "category": "scythe",  "damage": 9,  "attack_speed": 1.4, "mining_power": 1.1, "desc": "A long-snathed war scythe with a great curved blade — sweeps the night's dead in wide, reaping arcs."},
 	{"name": "Broadaxe",         "file": "battleaxe",        "category": "axe",     "damage": 10, "attack_speed": 1.2, "mining_power": 1.6, "desc": "A wide-bitted axe that fells trees and foes in heavy, biting arcs."},
 	{"name": "War Axe",          "file": "battleaxe",          "category": "axe",     "damage": 11, "attack_speed": 1.1, "mining_power": 1.6, "desc": "A battle-forged axe balanced for splitting helms on the field."},
 	{"name": "Bardiche",         "file": "battleaxe",         "category": "polearm", "damage": 11, "attack_speed": 1.1, "mining_power": 1.4, "desc": "A long-hafted axe-polearm that sweeps enemies at the end of its reach."},

@@ -22,7 +22,19 @@ void vertex() {
 void fragment() {
 	vec2 local = clamp(fract(v_uv), INSET, 1.0 - INSET);
 	vec2 uv = v_tile + local * TILE;
-	ALBEDO    = texture(atlas, uv).rgb * v_bright;
+	vec3 tex  = texture(atlas, uv).rgb;
+	ALBEDO    = tex * v_bright;
 	ROUGHNESS = 1.0;
 	METALLIC  = 0.0;
+	// Per-tile EMISSION so hot/precious tiles bloom through the scene's HDR glow (hdr_threshold 1.1).
+	// Tile index reconstructed from the per-face tile origin packed in COLOR.rg (col*0.125,row*0.125).
+	int tile = int(round(v_tile.y * 8.0)) * 8 + int(round(v_tile.x * 8.0));
+	if (tile == 26) {
+		// Lava: animated heat pulse, bright enough to bloom (and light caves once lava is generated).
+		EMISSION = tex * (2.2 + 0.6 * sin(TIME * 3.0 + (UV.x + UV.y) * 6.0));
+	} else if (tile >= 16 && tile <= 19) {
+		EMISSION = tex * 0.30;                         // ores: a faint self-glint in torchlight / dark caves
+	} else if (tile == 5) {
+		EMISSION = tex * (0.45 + 0.2 * sin(TIME * 2.0)); // furnace: a gently flickering forge mouth
+	}
 }

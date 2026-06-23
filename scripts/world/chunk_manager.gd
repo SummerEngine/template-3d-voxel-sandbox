@@ -43,6 +43,11 @@ var cave_noise := FastNoiseLite.new()
 var chunks: Dictionary = {}    # Vector2i -> Chunk node
 var overrides: Dictionary = {} # Vector3i -> int (player edits)
 var chests: Dictionary = {}    # Vector3i -> Inventory (per-chest storage)
+# --- world memory (persisted; populated by the novel-feature systems) ---
+var graves: Dictionary = {}    # Vector3i cell -> int kill_count (Hauntfields: the ground remembers)
+var hollow_scores: Dictionary = {}  # String "rx,ry,rz" region -> int carved-air pressure (Hunger of Hollows)
+var hollow_calmed: Dictionary = {}  # String region -> true once its reward has paid out (no farm)
+var monoliths: Dictionary = {}      # Vector3i cell -> Array[String] engravings (Chronicle Stone)
 
 ## The storage Inventory for the chest at a cell (created empty on first open).
 func chest_at(cell: Vector3i) -> Inventory:
@@ -270,23 +275,27 @@ func get_block(wx: int, wy: int, wz: int) -> int:
 		return overrides[key]
 	return generate_block(wx, wy, wz)
 
-func set_block(wx: int, wy: int, wz: int, t: int) -> void:
+func set_block(wx: int, wy: int, wz: int, t: int, s: int = -9999) -> void:
 	if wy <= 0 or wy >= WORLD_H:
 		return                                  # never edit the bedrock floor
 	var key := Vector3i(wx, wy, wz)
-	if t == generate_block(wx, wy, wz):
+	var old_t := get_block(wx, wy, wz)          # capture BEFORE mutating, to detect a solid<->air flip
+	if t == generate_block(wx, wy, wz, s):      # pass the column surface to skip a noise recompute when known
 		overrides.erase(key)                    # edit matches nature -> no override needed
 	else:
 		overrides[key] = t
 	_rebuild(chunk_x(wx), chunk_z(wz))
-	# rebuild neighbours when editing a border block (their culling depends on us)
+	# Neighbour chunks only need rebuilding if the boundary cell's SOLIDITY changed — their culling
+	# depends on us solely through the `!= AIR` test. A type/texture swap or a buried interior border
+	# edit changes nothing for them, so skip those rebuilds (saves whole worker builds on seam edits).
+	var flip := (old_t != VoxelTypes.AIR) != (t != VoxelTypes.AIR)
 	var lx := local_x(wx)
 	var lz := local_z(wz)
 	var ndx := -1 if lx == 0 else (1 if lx == CHUNK_W - 1 else 0)
 	var ndz := -1 if lz == 0 else (1 if lz == CHUNK_D - 1 else 0)
-	if ndx != 0: _rebuild(chunk_x(wx) + ndx, chunk_z(wz))
-	if ndz != 0: _rebuild(chunk_x(wx), chunk_z(wz) + ndz)
-	if ndx != 0 and ndz != 0: _rebuild(chunk_x(wx) + ndx, chunk_z(wz) + ndz)   # diagonal corner
+	if ndx != 0 and flip: _rebuild(chunk_x(wx) + ndx, chunk_z(wz))
+	if ndz != 0 and flip: _rebuild(chunk_x(wx), chunk_z(wz) + ndz)
+	if ndx != 0 and ndz != 0 and flip: _rebuild(chunk_x(wx) + ndx, chunk_z(wz) + ndz)   # diagonal corner
 
 # --- integer hashes (deterministic, position-seeded) ---
 

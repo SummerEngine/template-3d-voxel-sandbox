@@ -60,6 +60,11 @@ func _apply() -> void:
 
 	if _env:
 		_env.ambient_light_energy = lerpf(0.18, 1.0, daylight) + 0.2 * blood
+		# Time-of-day colour grading: nights read crisper, dawn/dusk get a subtle lift. Contrast +
+		# brightness only — Weather owns adjustment_saturation, so the two never clobber each other.
+		_env.adjustment_enabled = true
+		_env.adjustment_contrast = lerpf(1.0, 1.08, 1.0 - daylight)
+		_env.adjustment_brightness = lerpf(1.0, 1.03, clampf(1.0 - absf(elev) * 3.0, 0.0, 1.0))
 
 	if _sky:
 		var glow: float = clampf(1.0 - absf(elev) * 3.0, 0.0, 1.0)   # peaks at dawn/dusk
@@ -67,6 +72,7 @@ func _apply() -> void:
 		_sky.set_shader_parameter("top_color", NIGHT_TOP.lerp(DAY_TOP, daylight).lerp(BLOOD_TOP, blood))
 		_sky.set_shader_parameter("horizon_color", horizon)
 		_sky.set_shader_parameter("star_amount", clampf(1.0 - daylight * 2.0, 0.0, 1.0))
+		_sky.set_shader_parameter("blood", blood)   # crimson swollen moon + aureole on siege nights
 		if _env:
 			_env.fog_light_color = horizon   # fog blends into the current sky horizon
 

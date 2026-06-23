@@ -96,4 +96,6 @@ func _physics_process(delta: float) -> void:
 			if player.has_method("collect_item"):
 				taken = player.collect_item(block_id, 1)
 			if taken > 0:
+				if player.has_method("_emit_burst"):
+					player._emit_burst(global_position, Color(0.95, 0.82, 0.35), 6, 0.35, 70.0, 0.6, 1.6, 3.0)   # warm pickup poof
 				queue_free()        # only despawn if it actually fit; else wait on the ground

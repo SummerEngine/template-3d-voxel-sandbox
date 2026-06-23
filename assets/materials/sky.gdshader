@@ -11,6 +11,7 @@ uniform float star_amount = 0.0;
 // wind-driven drift offset so the cloud field slides across the sky.
 uniform float cloud_cover = 0.0;
 uniform float cloud_time = 0.0;
+uniform float blood = 0.0;          // blood-moon strength (0..~0.85), driven by DayNight
 
 float hash21(vec2 p) {
 	p = fract(p * vec2(123.34, 456.21));
@@ -55,15 +56,23 @@ void sky() {
 	// Sun disc + soft glow (LIGHT0_DIRECTION is the travel direction; the sun is opposite).
 	if (LIGHT0_ENABLED) {
 		float sd = dot(dir, -LIGHT0_DIRECTION);
+		// Layered sun: a tight bloom-able core + a soft halo + a wide warm horizon aureole. Everything
+		// is scaled by LIGHT0_ENERGY so the wide glow fades out at night/overcast (dir is still defined).
 		float disc = smoothstep(0.9990, 0.9996, sd);
-		float glow = pow(clamp(sd, 0.0, 1.0), 220.0) * 0.6;
-		col += (disc + glow) * LIGHT0_COLOR * LIGHT0_ENERGY;
+		float core = pow(clamp(sd, 0.0, 1.0), 600.0) * 3.0;     // only this is meant to cross 1.1 and bloom
+		float halo = pow(clamp(sd, 0.0, 1.0), 40.0) * 0.5;
+		float aureole = pow(clamp(sd, 0.0, 1.0), 6.0) * (1.0 - clamp(up, 0.0, 1.0)) * 0.35;
+		vec3 sun_c = LIGHT0_COLOR * LIGHT0_ENERGY;
+		col += (disc + core + halo) * sun_c;
+		col += aureole * sun_c;
+		col += pow(clamp(sd, 0.0, 1.0), 3.0) * 0.15 * sun_c;   // faint sky-wide warm air glow near the sun
 
-		// Moon: a soft pale disc on the anti-sun side, visible at night.
+		// Moon: pale by default, swelling into a crimson disc with a pulsing aureole on a blood moon.
 		float md = dot(dir, LIGHT0_DIRECTION);
-		float moon = smoothstep(0.9965, 0.9990, md);
-		float moon_glow = pow(clamp(md, 0.0, 1.0), 800.0) * 0.4;
-		col += (moon + moon_glow) * star_amount * vec3(0.92, 0.94, 1.0);
+		float moon = smoothstep(mix(0.9965, 0.992, blood), 0.9990, md);
+		vec3 moonCol = mix(vec3(0.92, 0.94, 1.0), vec3(1.0, 0.12, 0.06), blood);
+		col += (moon + pow(clamp(md, 0.0, 1.0), 800.0) * 0.4) * star_amount * moonCol;
+		col += pow(clamp(md, 0.0, 1.0), 5.0) * blood * (0.6 + 0.3 * sin(TIME * 0.8)) * vec3(0.9, 0.1, 0.05);
 	}
 
 	// Procedural twinkling stars in the upper hemisphere, fading in at night.
@@ -73,10 +82,17 @@ void sky() {
 		float h = hash21(cell);
 		if (h > 0.985) {
 			vec2 f = fract(sc) - 0.5;
-			float star = smoothstep(0.13, 0.0, length(f));
+			float r = mix(0.07, 0.16, hash21(cell + 3.7));        // varied star size
+			float star = smoothstep(r, 0.0, length(f));
 			float tw = 0.6 + 0.4 * sin(TIME * 2.5 + h * 120.0);
-			col += star * star_amount * tw;
+			vec3 scol = mix(vec3(1.0, 0.85, 0.7), vec3(0.7, 0.8, 1.0), hash21(cell + 11.3));  // colour temp
+			float energy = h > 0.997 ? 1.4 : 0.8;                 // a few bright stars cross 1.1 and bloom
+			col += star * star_amount * tw * energy * scol;
 		}
+		// Faint Milky Way band arcing across the dome (night-only, so free by day).
+		vec3 bn = normalize(vec3(0.4, 0.7, 0.55));
+		float band = smoothstep(0.35, 0.0, abs(dot(normalize(dir), bn)));
+		col += band * fbm(dir.xz * 2.0) * star_amount * 0.12 * vec3(0.85, 0.88, 1.0);
 	}
 
 	// Drifting clouds: fbm on the sky dome, coverage rises with cloud_cover (scattered white

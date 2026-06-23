@@ -15,6 +15,7 @@ static var sfx := 1.0
 static var sensitivity := 1.0      # multiplier on the player's base mouse sensitivity
 static var render_radius := 4      # chunks streamed around the player (2..8)
 static var keybinds := {}          # action name -> physical keycode (overrides; see InputActions)
+static var world_unease := true    # the world quietly acts behind your back (mirages, blind-spot edits)
 static var _loaded := false
 
 static func load_cfg() -> void:
@@ -29,6 +30,7 @@ static func load_cfg() -> void:
 	sfx = float(cf.get_value("audio", "sfx", sfx))
 	sensitivity = float(cf.get_value("input", "sensitivity", sensitivity))
 	render_radius = int(cf.get_value("world", "render_radius", render_radius))
+	world_unease = bool(cf.get_value("gameplay", "world_unease", world_unease))
 	var kb = cf.get_value("input", "keybinds", {})
 	if kb is Dictionary:
 		keybinds = kb
@@ -40,6 +42,7 @@ static func save_cfg() -> void:
 	cf.set_value("audio", "sfx", sfx)
 	cf.set_value("input", "sensitivity", sensitivity)
 	cf.set_value("world", "render_radius", render_radius)
+	cf.set_value("gameplay", "world_unease", world_unease)
 	cf.set_value("input", "keybinds", keybinds)
 	cf.save(PATH)
 

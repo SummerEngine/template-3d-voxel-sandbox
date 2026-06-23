@@ -11,6 +11,17 @@ signal mob_killed
 signal night_survived
 @warning_ignore("unused_signal")   # main.gd listens to clear spawn-camping hostiles
 signal respawned
+# --- novel-feature hooks (Hauntfields / Hollows / Chronicle / Doppelganger / Echo-Sounding) ---
+@warning_ignore("unused_signal")   # emitted by HostileMob on a combat death (carries the death cell)
+signal mob_died_at(pos: Vector3)
+@warning_ignore("unused_signal")   # emitted on the player's own death (Hauntfields grave)
+signal died_at(pos: Vector3)
+@warning_ignore("unused_signal")   # every block the player breaks (Hollows pressure)
+signal block_broken_at(cell: Vector3i, id: int)
+@warning_ignore("unused_signal")   # every block the player places (Hollows fill + Doppelganger profile)
+signal block_placed_at(cell: Vector3i, id: int)
+@warning_ignore("unused_signal")   # right-click while holding the Resonator (Echo-Sounding)
+signal resonator_ping
 
 ## Third-person (toggle first-person) Minecraft-style controller.
 ## Move WASD, look mouse, Space jump (double-tap or F = fly), Ctrl sprint, Shift
@@ -477,7 +488,7 @@ func _setup_vfx() -> void:
 ## Fire a reused one-shot burst at `pos`, tinted `color`. Falls back to nothing if the pool
 ## isn't ready (very early calls). gravity is the downward accel magnitude (positive number).
 func _emit_burst(pos: Vector3, color: Color, amount: int, life: float, spread: float,
-		vmin: float, vmax: float, grav: float) -> void:
+		vmin: float, vmax: float, grav: float, dir: Vector3 = Vector3.UP) -> void:
 	var p := _free_vfx()
 	if p == null:
 		return
@@ -487,6 +498,7 @@ func _emit_burst(pos: Vector3, color: Color, amount: int, life: float, spread: f
 	p.initial_velocity_min = vmin
 	p.initial_velocity_max = vmax
 	p.gravity = Vector3(0, -grav, 0)
+	p.direction = dir                      # default UP; combat/mining pass a world-space direction
 	p.color = color
 	p.global_position = pos
 	p.restart()
@@ -770,6 +782,7 @@ func _build_viewmodel() -> void:
 	# Shift ~40% along the handle so the head sits up in view and the handle trails off-screen
 	# toward the corner — reads as a tool being held, not a weapon floating dead-centre.
 	m.position[axis] += box.size[axis] * 0.42 * s
+	_viewmodel_no_clip(m)            # draw the held tool OVER the world so it never sinks into a block
 
 ## First-person arm: a generated robot forearm + gripping fist (matches the explorer-bot),
 ## fitted to hand size and posed via a wrapper so the fist sits at the grip and the
@@ -797,6 +810,24 @@ func _build_fp_arm(root: Node3D) -> void:
 	var s := FP_ARM_SIZE / longest if longest > 0.0001 else 1.0
 	arm.scale = Vector3(s, s, s)
 	arm.position = -box.get_center() * s            # centre the model on the wrapper
+	_viewmodel_no_clip(arm)                          # fist also draws over the world, no clipping
+
+## Make the first-person viewmodel ALWAYS draw on top of the world so it never clips INTO a block
+## when you stand against a wall or look down at the ground. Per-surface depth-test-disabled copies
+## keep each part's original colour (wood/steel), and a high render_priority draws it last.
+func _viewmodel_no_clip(n: Node) -> void:
+	if n is MeshInstance3D:
+		var mi := n as MeshInstance3D
+		if mi.mesh:
+			for si in range(mi.mesh.get_surface_count()):
+				var src := mi.get_active_material(si)
+				if src is BaseMaterial3D:
+					var dm: BaseMaterial3D = src.duplicate()
+					dm.no_depth_test = true
+					dm.render_priority = 4
+					mi.set_surface_override_material(si, dm)
+	for c in n.get_children():
+		_viewmodel_no_clip(c)
 
 ## Animate the first-person weapon each frame: a gentle idle sway, a stronger walk bob
 ## synced to movement, and a quick downward chop when mining/attacking (triggered by
@@ -998,10 +1029,14 @@ func _physics_process(delta: float) -> void:
 			# Right-click a station (table/furnace/chest) opens it (once, on press);
 			# otherwise it places the held block.
 			var handled := false
-			if ray.is_colliding() and world_manager:
+			# Holding the Resonator: a right-click pings the surrounding rock (Echo-Sounding).
+			if not _rmb_down and inventory.id_of(selected) == VoxelTypes.RESONATOR:
+				emit_signal("resonator_ping")
+				handled = true
+			if not handled and ray.is_colliding() and world_manager:
 				var tcell := _cell_from_hit(-0.5)
 				var tid: int = world_manager.get_block(tcell.x, tcell.y, tcell.z)
-				if tid == VoxelTypes.CRAFTING_TABLE or tid == VoxelTypes.FURNACE or tid == VoxelTypes.CHEST:
+				if tid == VoxelTypes.CRAFTING_TABLE or tid == VoxelTypes.FURNACE or tid == VoxelTypes.CHEST or tid == VoxelTypes.MONOLITH:
 					handled = true
 					if not _rmb_down:
 						_interact_station(tid, tcell)
@@ -1051,6 +1086,8 @@ func _interact_station(tid: int, cell: Vector3i) -> void:
 			get_tree().call_group("crafting_ui", "open_for", "furnace")
 		VoxelTypes.CHEST:
 			get_tree().call_group("chest_ui", "open_chest", cell)
+		VoxelTypes.MONOLITH:
+			get_tree().call_group("chronicle", "open_annals", cell)
 
 ## Right-click farming on the block being looked at (`tid` at `tcell`). Returns true if it
 ## tilled soil, planted a seed, or harvested a ripe crop — so the caller skips block placement.
@@ -1100,6 +1137,8 @@ func _update_footsteps(delta: float, in_water: bool) -> void:
 			if world_manager:
 				var bt: int = world_manager.get_block(int(global_position.x), int(global_position.y) - 1, int(global_position.z))
 				_play_snd(_step_sound_for(bt))
+				if horiz > 5.0 and bt != VoxelTypes.AIR:   # kick up material dust while sprinting
+					_emit_burst(global_position + Vector3(0, 0.08, 0), VoxelTypes.color_of(bt), 4, 0.3, 88.0, 0.6, 1.4, 5.0)
 	elif in_water and horiz > 0.5:
 		_step_timer -= delta
 		if _step_timer <= 0.0:
@@ -1199,6 +1238,7 @@ func _update_vitals(delta: float, moving: bool, sprinting: bool) -> void:
 			_update_hud()
 			if hud and hud.has_method("flash_heal"):
 				hud.flash_heal()
+			_emit_burst(global_position + Vector3(0, 1.0, 0), Color(0.45, 1.0, 0.55), 10, 0.6, 35.0, 1.2, 2.2, 1.0)   # gentle green heal motes (visible in 3rd person)
 		elif hunger <= 0.0 and health > 0:
 			health -= 1                      # starvation is now lethal — there are real stakes
 			_play_snd(snd_hurt)
@@ -1274,11 +1314,23 @@ func _attack_mob(mob) -> void:
 	if mob.has_method("take_damage"):
 		mob.take_damage(dmg)
 		_play_snd(snd_monster)
+		if hud and hud.has_method("hit_marker"): hud.hit_marker()
 	if mob is Node3D:
-		# A red impact burst confirms the hit; heavier weapons (more damage) stagger harder.
-		_emit_burst((mob as Node3D).global_position + Vector3(0, 1.0, 0), Color(0.75, 0.10, 0.10), 8, 0.4, 65.0, 1.5, 3.5, 7.0)
+		var mobpos: Vector3 = (mob as Node3D).global_position
+		# Directional blood spray ALONG the blow (away from the player), heavier on a heavy/lethal hit.
+		var away := mobpos - global_position
+		away.y = 0.3
+		away = away.normalized()
+		var hit_pos := mobpos + Vector3(0, 1.0, 0) - away * 0.4
+		var heavy: bool = dmg >= 5 or (("health" in mob) and int(mob.health) <= dmg)
+		_emit_burst(hit_pos, Color(0.85, 0.12, 0.10), 16 if heavy else 10, 0.28, 30.0, 2.0, 6.0 if heavy else 4.5, 5.0, away)   # fine mist
+		_emit_burst(hit_pos, Color(0.6, 0.05, 0.05), 5 if heavy else 3, 0.42, 22.0, 1.5, 3.0, 11.0, away)                       # arcing gobs
+		if heavy:
+			add_trauma(0.35)                   # the killing/heavy blow lands with extra weight
 		if mob.has_method("apply_knockback"):
-			mob.apply_knockback((mob as Node3D).global_position - global_position, clampf(float(dmg) * 0.7, 2.0, 9.0))
+			var force := clampf(float(dmg) * 0.7, 2.0, 9.0)
+			mob.apply_knockback(mobpos - global_position, force)
+			_emit_burst(mobpos + Vector3(0, 0.1, 0), Color(0.5, 0.42, 0.32), 4 + int(clampf(force - 2.0, 0.0, 5.0)), 0.45, 40.0, 0.5, 2.2, 9.0)   # ground scuff
 
 func _mine_terrain() -> void:
 	var cell := _cell_from_hit(-0.5)
@@ -1308,6 +1360,13 @@ func _mine_terrain() -> void:
 		if mine_anim != "": _mine_timer = 0.45   # > swing interval (0.35) so the looping mine clip plays smoothly, no idle-flicker between swings
 		_play_snd(snd_swing)
 		_weapon_swing(0.35)
+		# Chips fly off the targeted face each swing (previously particles only fired at break time).
+		if ray.is_colliding():
+			var hp := ray.get_collision_point()
+			var n := ray.get_collision_normal()
+			_emit_burst(hp, VoxelTypes.color_of(id), 5, 0.3, 35.0, 1.5, 3.0, 6.0, n)
+			if VoxelTypes.mine_tier(id) >= 1:
+				_emit_burst(hp, Color(1.6, 1.4, 0.7), 4, 0.22, 22.0, 2.0, 4.0, 7.0, n)   # bright sparks bloom on rock/ore
 	if hud: hud.set_mine_progress(_mine_progress)
 	if _mine_progress >= 1.0:
 		_break_block(cell, id)
@@ -1365,6 +1424,7 @@ func _break_block(cell: Vector3i, id: int) -> void:
 	if id == VoxelTypes.GRASS and randf() < 0.35:
 		_spawn_drop(cell, VoxelTypes.WHEAT_SEEDS)   # grass yields seeds to bootstrap farming
 	emit_signal("block_harvested", id)
+	emit_signal("block_broken_at", cell, id)
 
 func _weapon_swing(dur: float) -> void:
 	if weapon_holder == null:
@@ -1412,9 +1472,16 @@ func _try_place() -> void:
 	# A small dust poof on placement (matches the break-particle feedback).
 	_emit_burst(Vector3(cell) + Vector3(0.5, 0.5, 0.5), VoxelTypes.color_of(id), 8, 0.4, 78.0, 0.8, 2.0, 5.0)
 	on_inventory_changed()
+	# Placing a Monolith registers it as a Chronicle Stone (world-persisted; the Chronicle system
+	# binds to it and begins engraving your deeds).
+	if id == VoxelTypes.MONOLITH and world_manager and not world_manager.monoliths.has(cell):
+		world_manager.monoliths[cell] = []
+	emit_signal("block_placed_at", cell, id)
 
 func _try_eat() -> void:
 	if hunger >= MAX_HUNGER:
+		if hud and hud.has_method("show_toast"):
+			hud.show_toast("You are full", Color(0.8, 0.9, 0.8))   # G was a no-op here — say why
 		return
 	# Eat the held item if it's food; otherwise eat the first food found anywhere in the bag,
 	# so food doesn't get stranded in a storage slot.
@@ -1426,6 +1493,8 @@ func _try_eat() -> void:
 				slot = i
 				break
 	if slot < 0:
+		if hud and hud.has_method("show_toast"):
+			hud.show_toast("No food to eat", Color(1.0, 0.7, 0.5))   # don't fail silently
 		return
 	var restore: int = VoxelTypes.food_value(inventory.id_of(slot))
 	inventory.remove_one(slot)
@@ -1453,14 +1522,17 @@ func _update_highlight() -> void:
 		if collider and collider is Node and (collider as Node).is_in_group("mob"):
 			highlight.visible = false
 			_hide_crack()
+			if hud and hud.has_method("set_crosshair_state"): hud.set_crosshair_state(2)   # aiming at a mob
 			return
 		var cell := _cell_from_hit(-0.5)
 		highlight.global_position = Vector3(cell)
 		highlight.visible = true
 		_update_crack(cell)
+		if hud and hud.has_method("set_crosshair_state"): hud.set_crosshair_state(1)       # a block in reach
 	else:
 		highlight.visible = false
 		_hide_crack()
+		if hud and hud.has_method("set_crosshair_state"): hud.set_crosshair_state(0)       # nothing in reach
 
 func _update_crack(cell: Vector3i) -> void:
 	if _crack == null:
@@ -1539,6 +1611,7 @@ func _enter_death() -> void:
 	if _dead:
 		return
 	_dead = true
+	emit_signal("died_at", global_position)   # Hauntfields: the ground remembers where you fell
 	velocity = Vector3.ZERO
 	_reset_mining()
 	if highlight:

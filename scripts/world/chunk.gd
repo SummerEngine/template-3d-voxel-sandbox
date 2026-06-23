@@ -323,7 +323,11 @@ func _fill_cache(ox: int, oz: int, top: int, overrides_src: Dictionary) -> void:
 	if _ground_top != top or _ground_cache.size() != (top + 1) * _sz * _sx:
 		_compute_ground(ox, oz, top)
 		_ground_top = top
-	_cache = _ground_cache.duplicate()
+	# Copy-on-first-write: alias the cached terrain and only pay the ~120 KB duplicate when an edit
+	# actually lands in this chunk. Most streamed terrain + neighbour rebuilds have no in-bounds
+	# override, so they skip the copy entirely (steady GC-pressure win). Output-identical.
+	_cache = _ground_cache
+	var copied := false
 
 	# Overlay player edits (loop the overrides, not the volume — usually a small set).
 	for key in overrides_src.keys():
@@ -331,6 +335,9 @@ func _fill_cache(ox: int, oz: int, top: int, overrides_src: Dictionary) -> void:
 		var ly: int = key.y
 		var lz: int = key.z - oz
 		if ly >= 0 and ly <= top and lx >= -1 and lx <= CW and lz >= -1 and lz <= CD:
+			if not copied:
+				_cache = _ground_cache.duplicate()   # first in-bounds edit: now we need our own copy
+				copied = true
 			_cache[(ly * _sz + (lz + 1)) * _sx + (lx + 1)] = overrides_src[key]
 
 ## The expensive part: pure terrain + trees (no edits), cached for the chunk's lifetime.

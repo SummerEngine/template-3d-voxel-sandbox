@@ -23,6 +23,7 @@ var player
 var hud
 var day_night: DayNight
 var crafting_ui
+var hauntfields            # the ground-memory system (biases spawns + blood-moon eruptions)
 
 var _sun: DirectionalLight3D
 var _env: Environment
@@ -60,6 +61,10 @@ func _ready() -> void:
 		save = WorldSave.load_data()
 		world.overrides = WorldSave.overrides_from(save)
 		world.chests = WorldSave.chests_from(save)
+		world.graves = WorldSave.graves_from(save)            # Hauntfields: restore the killing grounds
+		world.hollow_scores = WorldSave.hollows_from(save)    # Hollows: restore carved-air pressure
+		world.hollow_calmed = WorldSave.hollow_calmed_from(save)  # Hollows: which rewards already paid out
+		world.monoliths = WorldSave.monoliths_from(save)      # Chronicle: restore engraved monuments
 		for tc in WorldSave.torches_from(save):
 			world.place_torch(tc)                    # rebuild placed torch lights
 
@@ -162,6 +167,44 @@ func _ready() -> void:
 	add_child(farm)
 	player.farm = farm
 
+	# --- Novel world systems ---------------------------------------------------------------
+	# Mirages (weather phantoms), oddities (blind-spot edits), hauntfields (the ground remembers),
+	# the Chronicle Stone, Echo-Sounding sonar, the Hunger of Hollows, and the Doppelganger builder.
+	var mirage := preload("res://scripts/world/mirage.gd").new()
+	mirage.name = "Mirage"
+	mirage.setup(world, player, day_night, weather)
+	add_child(mirage)
+
+	var oddities := preload("res://scripts/world/oddities.gd").new()
+	oddities.name = "Oddities"
+	oddities.setup(world, player, day_night, weather)
+	add_child(oddities)
+
+	hauntfields = preload("res://scripts/world/hauntfields.gd").new()
+	hauntfields.name = "Hauntfields"
+	hauntfields.setup(world, player)
+	add_child(hauntfields)
+
+	var chronicle := preload("res://scripts/world/chronicle.gd").new()
+	chronicle.name = "Chronicle"
+	chronicle.setup(world, player, day_night, weather)
+	add_child(chronicle)
+
+	var echo := preload("res://scripts/world/echo_sounding.gd").new()
+	echo.name = "EchoSounding"
+	echo.setup(world, player)
+	add_child(echo)
+
+	var hollows := preload("res://scripts/world/hollows.gd").new()
+	hollows.name = "Hollows"
+	hollows.setup(world, player)
+	add_child(hollows)
+
+	var mimic := preload("res://scripts/world/mimic_builder.gd").new()
+	mimic.name = "MimicBuilder"
+	mimic.setup(world, player)
+	add_child(mimic)
+
 	# Apply saved player state after everything exists.
 	if not save.is_empty():
 		if save.has("player"):
@@ -177,6 +220,24 @@ func _ready() -> void:
 			farm.load_data(save.crops)
 
 	GameSettings.apply_gameplay(player, world)   # saved sensitivity + view distance
+
+	# Initial day/night readout, and a first-time welcome on a brand-new world.
+	if hud and hud.has_method("set_time_state") and day_night:
+		hud.set_time_state(day_night.is_night(), _nights + 1, day_night.blood_moon)
+	if save.is_empty():
+		_welcome()
+		if hud and hud.has_method("auto_retire_controls"):
+			hud.auto_retire_controls()
+
+## A brief two-beat welcome the first time into a fresh world (loaded saves skip it).
+func _welcome() -> void:
+	if hud == null or not hud.has_method("show_toast"):
+		return
+	hud.show_toast("Welcome, builder. Gather wood and stone before dark.", Color(0.92, 0.96, 1.0))
+	var t := get_tree().create_timer(4.2)
+	t.timeout.connect(func() -> void:
+		if hud and hud.has_method("show_toast"):
+			hud.show_toast("When night falls the horde rises — make torches or build shelter.", Color(1.0, 0.85, 0.6)))
 
 ## Spiral out from the origin for a dry, above-sea column with no tree (or tree
 ## canopy) over it, so the player never spawns trapped inside leaves.
@@ -232,6 +293,14 @@ func _setup_environment() -> void:
 	_env.ambient_light_energy = 1.0
 	_env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	_env.tonemap_white = 6.0
+	# HDR bloom: lets bright emissives (lava, torches, the sun disc, sonar ghosts) actually glow.
+	# Screen-blend, conservative threshold — pure post, zero extra draw calls on this GPU-idle build.
+	_env.glow_enabled = true
+	_env.glow_intensity = 0.5
+	_env.glow_strength = 0.9
+	_env.glow_bloom = 0.12
+	_env.glow_hdr_threshold = 1.1
+	_env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SCREEN
 	# Atmospheric fog: distant terrain fades into the sky horizon — gives depth and hides
 	# the chunk-streaming edge. DayNight refreshes fog_light_color each frame to match the
 	# sky (blue by day, orange at dusk, dark at night).
@@ -240,6 +309,10 @@ func _setup_environment() -> void:
 	_env.fog_density = 0.02                            # matched to the farther render distance (Weather.BASE_FOG)
 	_env.fog_sky_affect = 0.0
 	_env.fog_aerial_perspective = 0.4
+	# Height fog: a thin layer pooling around sea level so valleys/water read with depth and the
+	# golden hour catches the mist. Separate from fog_density (which Weather owns), so no conflict.
+	_env.fog_height = 40.0
+	_env.fog_height_density = 0.04
 	var we := WorldEnvironment.new()
 	we.name = "WorldEnvironment"
 	we.environment = _env
@@ -308,10 +381,20 @@ func _on_phase_changed(is_night: bool) -> void:
 		var blood := night_no % BLOOD_MOON_EVERY == 0
 		if day_night:
 			day_night.blood_moon = blood
+		if hud:
+			if hud.has_method("set_blood_moon"): hud.set_blood_moon(blood)
+			if hud.has_method("set_time_state"): hud.set_time_state(true, night_no, blood)
 		var count: int = mini(MAX_NIGHT_MOBS, NIGHT_MOB_COUNT + _nights * 2)
 		if blood:
 			count = mini(MAX_NIGHT_MOBS + 6, count + 5)   # they come in force
 		_spawn_hostiles(count, blood)
+		# On a blood moon, part of the horde erupts straight out of your densest killing grounds.
+		if blood and hauntfields:
+			var targets: Array = hauntfields.blood_moon_targets(3)
+			for ep in targets:
+				_spawn_clawup(ep)
+			if targets.size() > 0 and hud and hud.has_method("show_toast"):
+				hud.show_toast("They claw up from where you fought...", Color(1.0, 0.4, 0.35))
 		if player and player.hud and player.hud.has_method("show_toast"):
 			if blood:
 				player.hud.show_toast("BLOOD MOON  -  Night %d. They come in force." % night_no, Color(1.0, 0.3, 0.25))
@@ -322,6 +405,9 @@ func _on_phase_changed(is_night: bool) -> void:
 		if day_night:
 			day_night.blood_moon = false
 		_nights += 1
+		if hud:
+			if hud.has_method("set_blood_moon"): hud.set_blood_moon(false)
+			if hud.has_method("set_time_state"): hud.set_time_state(false, _nights + 1, false)
 		if player:
 			if player.has_method("play_dawn_sound"):
 				player.play_dawn_sound()   # birdsong relief beat at sunrise
@@ -355,6 +441,11 @@ func _spawn_hostiles(n: int, blood := false) -> void:
 func _spawn_one_hostile(spec: Dictionary) -> void:
 	var ang := _rng.randf_range(0.0, TAU)
 	var rad := _rng.randf_range(12.0, 20.0)
+	# Hauntfields biases some of the horde to march in from your bloodiest ground.
+	if hauntfields:
+		var b: Dictionary = hauntfields.bias_spawn(player.global_position, ang, rad)
+		ang = float(b.get("ang", ang))
+		rad = float(b.get("rad", rad))
 	var mx: float = player.global_position.x + cos(ang) * rad
 	var mz: float = player.global_position.z + sin(ang) * rad
 	var my: int = world.surface_height(int(mx), int(mz)) + 2
@@ -369,6 +460,33 @@ func _spawn_one_hostile(spec: Dictionary) -> void:
 	mob.position = Vector3(mx, float(my), mz)
 	add_child(mob)
 	_hostiles.append(mob)
+
+## A blood-moon claw-up: a hostile erupts from a marked grave cell with a dirt burst.
+func _spawn_clawup(pos: Vector3) -> void:
+	# Never erupt in the player's lap — push close targets out to the spawn-ring floor so they
+	# still get reaction time (the eruption count is unchanged; only the position moves).
+	if player:
+		var dx: float = pos.x - player.global_position.x
+		var dz: float = pos.z - player.global_position.z
+		var hd := sqrt(dx * dx + dz * dz)
+		if hd < 10.0:
+			var a := atan2(dz, dx) if hd > 0.01 else _rng.randf_range(0.0, TAU)
+			var nx: float = player.global_position.x + cos(a) * 14.0
+			var nz: float = player.global_position.z + sin(a) * 14.0
+			pos = Vector3(nx, float(world.surface_height(int(nx), int(nz)) + 2), nz)
+	if hauntfields:
+		hauntfields.clawup_vfx(pos)
+	var mob := preload("res://scripts/entities/hostile_mob.gd").new()
+	mob.player = player
+	mob.world = world
+	mob.day_night = day_night
+	mob.health = 12 + mini(_nights * 3, 24)
+	mob.damage = 2 + mini(floori(float(_nights) / 2.0), 4)
+	mob.position = pos
+	add_child(mob)
+	_hostiles.append(mob)
+	if mob.has_method("emerge"):
+		mob.emerge()                          # rise up out of the marked ground
 
 func _clear_hostiles() -> void:
 	_spawn_queue.clear()                  # cancel any pending spawns (e.g. at dawn)
