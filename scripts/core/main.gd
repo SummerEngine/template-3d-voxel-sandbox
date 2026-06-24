@@ -394,6 +394,8 @@ func _on_phase_changed(is_night: bool) -> void:
 			if hud.has_method("set_blood_moon"): hud.set_blood_moon(blood)
 			if hud.has_method("set_time_state"): hud.set_time_state(true, night_no, blood)
 		var count: int = mini(MAX_NIGHT_MOBS, NIGHT_MOB_COUNT + _nights * 2)
+		if night_no == 1:
+			count = maxi(2, int(count / 3.0))   # gentle first night so new players can find their feet before the siege escalates
 		if blood:
 			count = mini(MAX_NIGHT_MOBS + 6, count + 5)   # they come in force
 			if _stinger and _stinger.stream:

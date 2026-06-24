@@ -130,6 +130,9 @@ var _fall_speed := 0.0
 var _horiz_speed := 0.0          # horizontal speed, computed once per frame after move_and_slide
 var _jump_sfx_cd := 0.0          # throttles jump push-off feedback so a held bounce can't spam it
 var _landed_once := false
+var _respawn_grace := 0.0       # secs after a respawn/load where gravity still applies even if the
+                                # feet chunk reads not-ready — so the streaming guard can NEVER pin us
+                                # mid-air (the recurring "respawn in the sky" bug). See _physics_process.
 var _ext_push := Vector3.ZERO   # one-frame external shove (e.g. mob knockback), applied with collision
 var _regen_block := 0.0         # seconds remaining where passive health regen is suppressed (post-hit)
 
@@ -917,6 +920,8 @@ func _physics_process(delta: float) -> void:
 	if _dead:
 		velocity = Vector3.ZERO   # frozen until the player respawns
 		return
+	if _respawn_grace > 0.0:
+		_respawn_grace = maxf(0.0, _respawn_grace - delta)
 	var on_floor := is_on_floor()
 	var in_water := _in_water()
 	_update_underwater_audio()
@@ -988,11 +993,13 @@ func _physics_process(delta: float) -> void:
 			else:
 				velocity.y = lerpf(velocity.y, -1.2, delta * 4.0)
 		elif not on_floor:
-			if _ground_streaming():
+			if _ground_streaming() and _respawn_grace <= 0.0:
 				# The chunk below hasn't streamed its collider in yet — hold position so we don't
 				# fall through (no phantom long fall / fall-damage "death from nowhere"). Freeze
 				# horizontal motion too: otherwise WASD would drift us across not-yet-ready terrain
 				# while vertical is pinned, which reads as "flying" (e.g. right after a respawn).
+				# EXCEPTION: during the post-respawn grace window we let gravity apply instead, so a
+				# chunk that reads not-ready can never freeze the player in the sky indefinitely.
 				velocity = Vector3.ZERO
 			else:
 				velocity.y -= gravity * delta
@@ -1735,25 +1742,47 @@ func _do_respawn() -> void:
 func _respawn() -> void:
 	flying = false                 # always respawn grounded (creative fly is off until re-toggled)
 	velocity = Vector3.ZERO
-	global_position = spawn_point
-	# Build the ground under the spawn point NOW (the spawn chunk may have been unloaded if we died
-	# far away). preload_around builds the spawn chunks synchronously — build() applies the collider
-	# immediately — and skips any already loaded, so it's nearly free when we died near spawn.
-	if world_manager and world_manager.has_method("preload_around"):
-		var cc := Vector2i(world_manager.chunk_x(int(spawn_point.x)), world_manager.chunk_z(int(spawn_point.z)))
-		world_manager.preload_around(cc)
-	# Place us DIRECTLY on the surface instead of dropping from the air. This guarantees we respawn
-	# standing on the ground regardless of how high spawn_point was or whether a chunk is still
-	# streaming (which would otherwise leave us hovering). surface_height is the terrain top; a solid
-	# block's top face is one above it, so feet sit at surface_height + 1.
-	if world_manager and world_manager.has_method("surface_height"):
-		var g: int = world_manager.surface_height(int(floor(spawn_point.x)), int(floor(spawn_point.z)))
-		global_position.y = float(g) + 1.05
+	# Snap the player onto the REAL surface of the spawn COLUMN. We do this with a single
+	# whole-Vector3 assignment via _ground_at() (which force-builds the column's chunks, finds the
+	# true collider top accounting for caves/edits/structures, and settles onto it), so we can never
+	# inherit an airborne spawn_point.y or hover over still-streaming terrain. This is the one path
+	# the recurring "respawn in the sky" bug kept slipping through. Verify by dying far from spawn,
+	# over a cave/edited column, and at negative coords — all must land standing on solid ground.
+	global_position = _ground_at(spawn_point.x, spawn_point.z)
 	_fall_speed = 0.0
 	_was_on_floor = true
 	_landed_once = false
+	_respawn_grace = 0.4           # let gravity (not the streaming pin) close any residual gap
 	_invuln = maxf(_invuln, 2.0)   # spawn grace on EVERY respawn path (death + void-fall)
 	respawned.emit()               # let main clear any hostiles camping the spawn (no death-loop)
+
+## Returns a guaranteed-grounded world position for the column (x,z): force-builds that column's
+## 3x3 chunk neighbourhood synchronously (so a collider exists THIS frame even after dying far
+## away), finds the real standable top via solid_top_y (overrides/caves/structures aware, not the
+## noise-only surface_height), and places feet 0.05 above it. Then snaps to the floor so
+## is_on_floor() is true on the next physics frame and the streaming guard branch is skipped.
+func _ground_at(x: float, z: float) -> Vector3:
+	var fx := floori(x)
+	var fz := floori(z)
+	var gy := 80.0                  # safe fallback if the world manager is somehow unavailable
+	if world_manager:
+		# Force-build the chunks around the ACTUAL feet column (floori — matches is_chunk_ready /
+		# _ground_streaming, unlike the old int() which disagreed at negative coords).
+		if world_manager.has_method("preload_around"):
+			var cc := Vector2i(world_manager.chunk_x(fx), world_manager.chunk_z(fz))
+			world_manager.preload_around(cc)
+		if world_manager.has_method("solid_top_y"):
+			gy = float(world_manager.solid_top_y(fx, fz)) + 1.05
+		elif world_manager.has_method("surface_height"):
+			gy = float(world_manager.surface_height(fx, fz)) + 1.05
+	var pos := Vector3(float(fx) + 0.5, gy, float(fz) + 0.5)
+	# Establish floor contact this frame: move to the target, then snap down onto the collider so
+	# is_on_floor() reads true next frame (no airborne pin). apply_floor_snap needs the body placed
+	# and a floor within snap_length below it.
+	global_position = pos
+	velocity = Vector3.ZERO
+	apply_floor_snap()
+	return global_position
 
 func _spawn_drop(cell: Vector3i, id: int) -> void:
 	if world_manager == null:
@@ -1800,17 +1829,22 @@ func apply_save(p: Dictionary) -> void:
 		var sx := float(p.x)
 		var sy := float(p.y)
 		var sz := float(p.z)
-		# Guard against corrupt coords, and against being buried/floating after a terrain
-		# change: reject non-finite values and lift the player onto the surface if below it.
+		# Guard against corrupt coords, and against being buried OR floating after a terrain change
+		# or a mid-air/flying save: reject non-finite values, then UNCONDITIONALLY snap the player
+		# onto the real surface of the saved column. The old code only LIFTED a buried player (it
+		# never lowered a high saved y), so a save taken while flying/falling reloaded the player in
+		# the sky — the resume-path half of the recurring "respawn in the sky" bug. _ground_at
+		# force-builds the column, finds the true collider top (caves/edits/structures aware) and
+		# settles onto it, matching the death-respawn path exactly.
 		if not (is_finite(sx) and is_finite(sy) and is_finite(sz)):
 			sx = 0.5
 			sy = 80.0
 			sz = 0.5
-		if world_manager and world_manager.has_method("surface_height"):
-			var ground := float(world_manager.surface_height(int(sx), int(sz)))
-			if sy < ground + 2.0:
-				sy = ground + 2.0
-		global_position = Vector3(sx, sy, sz)
+		if world_manager:
+			global_position = _ground_at(sx, sz)
+			_respawn_grace = 0.4   # same anti-pin grace as a death respawn (covers a still-streaming load)
+		else:
+			global_position = Vector3(sx, sy, sz)
 		spawn_point = global_position
 	health = clampi(int(p.get("health", health)), 0, max_health)   # never load out-of-range / negative HP
 	hunger = clampf(float(p.get("hunger", hunger)), 0.0, float(MAX_HUNGER))

@@ -291,6 +291,22 @@ func get_block(wx: int, wy: int, wz: int) -> int:
 		return overrides[key]
 	return generate_block(wx, wy, wz)
 
+## The REAL standable top of a column: the highest y whose block is solid-and-not-water with a
+## non-solid (air/water) cell above it. Unlike surface_height (pure 2D noise) this consults
+## get_block, so it respects player edits, stamped structures AND carved caves/lava — the cases
+## where surface_height over-reports and a respawn would land in the air or inside a structure.
+## Scans down from a safe ceiling; returns 0 (bedrock) if nothing solid is found.
+func solid_top_y(wx: int, wz: int) -> int:
+	var start: int = mini(surface_height(wx, wz) + TREE_H + 2, WORLD_H - 1)
+	var above_open := true   # treat the ceiling as open air
+	for wy in range(start, 0, -1):
+		var b := get_block(wx, wy, wz)
+		var solid := VoxelTypes.is_solid(b) and b != VoxelTypes.WATER
+		if solid and above_open:
+			return wy
+		above_open = not solid
+	return 0
+
 func set_block(wx: int, wy: int, wz: int, t: int, s: int = -9999) -> void:
 	if wy <= 0 or wy >= WORLD_H:
 		return                                  # never edit the bedrock floor
