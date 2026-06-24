@@ -413,6 +413,11 @@ func _unload_far(center: Vector2i) -> void:
 
 func _load(c: Vector2i, sync := false) -> void:
 	if chunks.has(c):
+		# A sync (spawn/respawn) request for a chunk that's still mid-async-build: force it to
+		# finish and apply its collider NOW, so the ground exists this frame instead of a few
+		# frames later (otherwise the player can briefly hover on a fresh-load respawn).
+		if sync and is_instance_valid(chunks[c]) and not chunks[c].is_ready():
+			chunks[c].build()
 		return
 	var ch := preload("res://scripts/world/chunk.gd").new()
 	ch.manager = self

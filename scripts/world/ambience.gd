@@ -8,6 +8,7 @@ extends Node3D
 
 var player                              # Player
 var day_night                           # DayNight
+var _has_atmo := false                  # cached: does the player expose atmosphere_blocked() (invariant)
 
 const AREA := 18.0                      # motes scatter within this radius of the player
 const NIGHT_BED := "res://assets/audio/ambient/night.wav"   # looping crickets/owls bed
@@ -20,6 +21,7 @@ var _rng := RandomNumberGenerator.new()
 func setup(p, dn) -> void:
 	player = p
 	day_night = dn
+	_has_atmo = p != null and p.has_method("atmosphere_blocked")
 
 func _ready() -> void:
 	_rng.randomize()
@@ -92,7 +94,7 @@ func _process(delta: float) -> void:
 	_pollen.global_position = pos + Vector3(0.0, 3.0, 0.0)
 	# Suppress motes when the player is underground/under cover or submerged (no sunbeam pollen in
 	# a cave, no dry dust underwater) — the player computes this on a throttle.
-	var blocked: bool = player.has_method("atmosphere_blocked") and player.atmosphere_blocked()
+	var blocked: bool = _has_atmo and player.atmosphere_blocked()
 	_fireflies.emitting = night and not blocked
 	_pollen.emitting = (not night) and not blocked
 	# Crossfade the night ambience bed (audible only at night, and not while underground/submerged).

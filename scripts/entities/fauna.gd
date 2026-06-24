@@ -65,7 +65,7 @@ func _process(delta: float) -> void:
 		var c = _mine[i]
 		if not is_instance_valid(c):
 			_mine.remove_at(i)
-		elif c.global_position.distance_to(player.global_position) > CULL_DIST:
+		elif c.global_position.distance_squared_to(player.global_position) > CULL_DIST * CULL_DIST:
 			c.queue_free()
 			_mine.remove_at(i)
 	_t -= delta

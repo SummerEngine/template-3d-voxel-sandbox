@@ -31,6 +31,7 @@ var _next: PackedScene
 var _bar_fill: ColorRect
 var _pct: Label
 var _tip: Label
+var _sub: Label                             # sub-text; swapped to "Ready…" once load finishes
 
 func _ready() -> void:
 	var win := get_window()
@@ -89,6 +90,7 @@ func _build_ui() -> void:
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sub.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	vb.add_child(sub)
+	_sub = sub
 
 	var bar := Control.new()
 	bar.custom_minimum_size = Vector2(BAR_W, 18)
@@ -171,6 +173,9 @@ func _process(delta: float) -> void:
 		_bar_fill.size.x = BAR_W * clampf(frac, 0.0, 1.0)
 	if _pct:
 		_pct.text = "%d%%" % roundi(frac * 100.0)
+	# Assets done but still holding for MIN_TIME — tell the player it's ready instead of "Loading…".
+	if _index >= total and _sub and _sub.text != "Ready — entering world…":
+		_sub.text = "Ready — entering world…"
 
 	if not _done and _index >= total and _next != null and _elapsed >= MIN_TIME:
 		_done = true

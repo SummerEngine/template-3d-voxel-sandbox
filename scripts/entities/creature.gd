@@ -43,6 +43,8 @@ var _bank := 0.0
 var _last_yaw := 0.0
 var _dead := false                    # set on the killing hit so loot/VFX never double-fire
 var _avoid_t := 0.0                   # throttle terrain-avoidance world queries (not every frame)
+var _terr_h := 0.0                    # cached terrain height under us — air/water altitude follow
+var _terr_t := 0.0                    # countdown to the next terrain-height sample (~5Hz, not 60Hz)
 var _anim_player: AnimationPlayer     # the model's own AnimationPlayer, if it's a rigged model
 var _has_clip := false                # true -> a baked clip drives the body (skip procedural anim)
 var _flap := 0.5                      # bird flap intensity envelope: flap to climb, glide to dive
@@ -454,6 +456,12 @@ func _drop_meat() -> void:
 func _physics_process(delta: float) -> void:
 	_timer -= delta
 	_avoid_t -= delta
+	# Air/water creatures follow the terrain height; sample it ~5Hz instead of every frame — the
+	# noise-based surface_height is heavy and barely changes between frames for a slow flyer/swimmer.
+	_terr_t -= delta
+	if _terr_t <= 0.0 and world and (_mode == AIR or _mode == WATER):
+		_terr_t = 0.2
+		_terr_h = float(world.surface_height(floori(global_position.x), floori(global_position.z)))
 	if _flee > 0.0:
 		_flee -= delta
 	elif _timer <= 0.0:
@@ -542,10 +550,7 @@ func _anim_ground(delta: float) -> void:
 # --- AIR ------------------------------------------------------------------------------
 func _move_air(delta: float) -> void:
 	var spd := _run if _flee > 0.0 else _speed
-	var ground := 0.0
-	if world:
-		ground = float(world.surface_height(floori(global_position.x), floori(global_position.z)))
-	var target_alt := ground + _alt
+	var target_alt := _terr_h + _alt   # _terr_h refreshed ~5Hz in _physics_process (was a per-frame noise eval)
 	var vy := clampf(target_alt - global_position.y, -3.0, 3.0)
 	if _flee > 0.0:
 		vy += 3.0
@@ -591,10 +596,7 @@ func _move_water(delta: float) -> void:
 		_avoid_t = 0.25
 		_avoid_shore()
 	var sea := float(world.SEA_LEVEL) if world else 40.0
-	var bed := 0.0
-	if world:
-		bed = float(world.surface_height(floori(global_position.x), floori(global_position.z)))
-	var lo := bed + 0.7
+	var lo := _terr_h + 0.7            # _terr_h refreshed ~5Hz in _physics_process (was a per-frame noise eval)
 	var hi := sea - 0.6
 	if hi < lo:
 		hi = lo

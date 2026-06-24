@@ -47,6 +47,7 @@ var _noise := FastNoiseLite.new()
 var weather := Weather.CLEAR
 var _intensity := 0.0                   # precipitation / sandstorm strength (0..1)
 var _sheltered := false                 # true when the player has blocks overhead (cave / roof)
+var _last_biome := ""                    # last announced biome — toast only when it changes
 var _desert := false                    # cached: is the player over desert (throttled noise query)
 var _clim_t := 0.0                       # throttle: recompute biome/shelter a few times a second
 
@@ -59,6 +60,8 @@ var _label: Label
 var _rain: GPUParticles3D
 var _snow: GPUParticles3D
 var _sand: GPUParticles3D
+var _sand_mat: ParticleProcessMaterial   # cached so the per-frame sandstorm update skips a Vector3+sqrt+cast
+var _sand_dir := Vector3.ZERO            # cached normalized sand drift direction (invariant)
 var _thunder_t := 0.0
 
 # audio (one looping bed, fade-swapped on change; plus thunder one-shots)
@@ -139,6 +142,8 @@ func _build_particles() -> void:
 			Vector3(0, -2.2, 0), Vector3(0.10, 0.10, 0.10), Color(1, 1, 1, 0.9))
 	_sand = _make_particles(520, 1.1, Vector3(1, 0.05, 0), 24.0, 16.0, 30.0,
 			Vector3(0, -1.5, 0), Vector3(0.14, 0.14, 0.14), Color(0.86, 0.70, 0.42, 0.7))
+	_sand_mat = _sand.process_material as ParticleProcessMaterial   # cache for the per-frame sandstorm update
+	_sand_dir = Vector3(1, 0.05, 0.3).normalized()
 	for p in [_rain, _snow, _sand]:
 		p.emitting = false
 		add_child(p)
@@ -249,6 +254,14 @@ func _derive_weather() -> void:
 	var biome := "meadow"
 	if world.has_method("biome_at"):
 		biome = world.biome_at(px, pz)
+	# Announce crossing into a new named region (reuses this throttled biome read; additive HUD cue).
+	if biome != _last_biome:
+		var prev := _last_biome
+		_last_biome = biome
+		var labels := {"desert": "the desert", "snow": "the snowfields", "jungle": "the jungle",
+				"forest": "the woods", "mountain": "the highlands", "meadow": "open plains"}
+		if prev != "" and hud and hud.has_method("show_toast") and labels.has(biome):
+			hud.show_toast("Entering %s" % labels[biome], Color(0.82, 0.95, 0.85))
 	var precip := clampf((_wet - 0.5) / 0.5, 0.0, 1.0) * clampf((_cloud - 0.45) / 0.55, 0.0, 1.0)
 
 	if biome == "desert":
@@ -333,7 +346,7 @@ func _update_particles() -> void:
 	_snow.emitting = open and weather == Weather.SNOW
 	_sand.emitting = open and weather == Weather.SANDSTORM
 	if _sand.emitting:
-		(_sand.process_material as ParticleProcessMaterial).direction = Vector3(1, 0.05, 0.3).normalized()
+		_sand_mat.direction = _sand_dir
 
 ## True when there are solid blocks just above the player's head (cave / building roof),
 ## so precipitation and its screen tint are suppressed indoors.
@@ -353,9 +366,10 @@ func _update_lightning(delta: float) -> void:
 	_thunder_t -= delta
 	if _thunder_t <= 0.0:
 		_thunder_t = randf_range(6.0, 14.0)
-		_flash_rect.color = Color(1, 1, 1, 0.55)
-		var tw := create_tween()
-		tw.tween_property(_flash_rect, "color:a", 0.0, 0.5)
+		if not _sheltered:                       # no sky-flash through a cave roof; thunder is still heard
+			_flash_rect.color = Color(1, 1, 1, 0.55)
+			var tw := create_tween()
+			tw.tween_property(_flash_rect, "color:a", 0.0, 0.5)
 		if _snd_thunder and _snd_thunder.stream:
 			var tw_t := create_tween()           # thunder lags the flash — that gap reads as distance
 			tw_t.tween_interval(randf_range(0.4, 1.8))

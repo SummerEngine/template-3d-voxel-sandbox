@@ -287,6 +287,8 @@ func _pause() -> void:
 	get_tree().call_group("chest_ui", "close")
 	paused = true
 	get_tree().paused = true
+	if _toast:
+		_toast.text = ""        # clear any stale "World saved" so it doesn't linger across pauses
 	_show(true)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 

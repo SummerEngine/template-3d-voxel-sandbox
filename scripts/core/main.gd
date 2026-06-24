@@ -547,7 +547,7 @@ func _process(delta: float) -> void:
 		var m = _cave_mobs[i]
 		if not is_instance_valid(m):
 			_cave_mobs.remove_at(i)
-		elif m.global_position.distance_to(player.global_position) > 30.0:
+		elif m.global_position.distance_squared_to(player.global_position) > 900.0:   # 30² — avoid per-frame sqrt
 			m.queue_free()
 			_cave_mobs.remove_at(i)
 	_cave_t -= delta

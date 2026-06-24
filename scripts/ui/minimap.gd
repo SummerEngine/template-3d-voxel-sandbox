@@ -27,6 +27,7 @@ var _border: Panel
 var _arrow: Label
 var _t := 0.0
 var _full := false
+var _cam = null                 # cached player camera (stable node, resolved once — avoids a per-frame Variant lookup)
 var _last_cx := 999999          # last sampled centre — skip redraw while standing still
 var _last_cz := 999999
 const ROWS_PER_FRAME := 4       # amortize the RES-row resample so no single frame stalls
@@ -97,9 +98,10 @@ func _process(delta: float) -> void:
 	if world == null or player == null or not is_instance_valid(player):
 		return
 	# Spin the facing arrow every frame (north-up map, arrow points where the camera looks).
-	var cam = player.get("camera")
-	if cam and is_instance_valid(cam):
-		var fwd: Vector3 = -cam.global_transform.basis.z
+	if not is_instance_valid(_cam):
+		_cam = player.get("camera")          # resolve once; the player's camera node is created in _ready and never reassigned
+	if is_instance_valid(_cam):
+		var fwd: Vector3 = -_cam.global_transform.basis.z
 		_arrow.rotation = atan2(fwd.x, -fwd.z)
 	if _building:
 		_build_rows()                      # fill a few rows of the in-progress map this frame

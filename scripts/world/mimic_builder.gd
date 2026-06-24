@@ -63,7 +63,7 @@ func _process(delta: float) -> void:
 		return
 	# Discovery: walking near an artifact you've never seen ups the tier of the next one.
 	for a in _artifacts:
-		if not a.seen and player.global_position.distance_to(a.pos) < DISCOVER_DIST:
+		if not a.seen and player.global_position.distance_squared_to(a.pos) < DISCOVER_DIST * DISCOVER_DIST:
 			a.seen = true
 			_discovered += 1
 	if _cd > 0.0:

@@ -59,6 +59,7 @@ const RECIPES := [
 	{"cat": "Tools", "kind": "tool", "tool": "Cutlass",        "out_name": "Cutlass",        "out_id": VoxelTypes.IRON_INGOT, "in": [[VoxelTypes.IRON_INGOT, 3], [VoxelTypes.STICK, 1]]},
 	{"cat": "Tools", "kind": "tool", "tool": "Falchion",       "out_name": "Falchion",       "out_id": VoxelTypes.IRON_INGOT, "in": [[VoxelTypes.IRON_INGOT, 3], [VoxelTypes.STICK, 1]]},
 	{"cat": "Tools", "kind": "tool", "tool": "Broadaxe",       "out_name": "Broadaxe",       "out_id": VoxelTypes.IRON_INGOT, "in": [[VoxelTypes.IRON_INGOT, 3], [VoxelTypes.STICK, 2]]},
+	{"cat": "Tools", "kind": "tool", "tool": "Greataxe",       "out_name": "Greataxe",       "out_id": VoxelTypes.IRON_INGOT, "in": [[VoxelTypes.IRON_INGOT, 6], [VoxelTypes.STICK, 2]]},
 	{"cat": "Tools", "kind": "tool", "tool": "Wooden Mallet",  "out_name": "Wooden Mallet",  "out_id": VoxelTypes.PLANKS,     "in": [[VoxelTypes.PLANKS, 4], [VoxelTypes.STICK, 2]]},
 	{"cat": "Tools", "kind": "tool", "tool": "Flanged Mace",   "out_name": "Flanged Mace",   "out_id": VoxelTypes.IRON_INGOT, "in": [[VoxelTypes.IRON_INGOT, 4], [VoxelTypes.STICK, 1]]},
 	{"cat": "Tools", "kind": "tool", "tool": "Warhammer",      "out_name": "Warhammer",      "out_id": VoxelTypes.IRON_INGOT, "in": [[VoxelTypes.IRON_INGOT, 5], [VoxelTypes.STICK, 2]]},
@@ -93,6 +94,7 @@ var _toast: Label
 var _taught_resonator := false   # teach the new right-click verbs once, on first craft
 var _taught_monolith := false
 var _mat_slots: Array = []     # {panel, swatch, count} per inventory slot
+var _mat_empty: Label          # "gather materials" hint shown when you have nothing yet
 var _recipe_rows: Array = []   # {btn, idx}
 var _snd_click: AudioStreamPlayer
 var _snd_open: AudioStreamPlayer
@@ -170,6 +172,12 @@ func _build() -> void:
 		var cell := _make_swatch(SWATCH)
 		grid.add_child(cell.panel)
 		_mat_slots.append({"panel": cell.panel, "swatch": cell.swatch, "icon": cell.icon, "count": cell.count})
+
+	_mat_empty = Label.new()
+	_mat_empty.text = "Gather materials to start crafting."
+	_mat_empty.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mat_empty.modulate = Color(1, 1, 1, 0.5)
+	vb.add_child(_mat_empty)
 
 	vb.add_child(_separator())
 
@@ -326,10 +334,12 @@ func _refresh() -> void:
 	# (the row turns green) — _refresh fires on every inventory change.
 	if _toast and _toast.text.begins_with("Need "):
 		_toast.text = ""
+	var any_mat := false
 	for i in range(_mat_slots.size()):
 		var s = player.inventory.slots[i]
 		var ui = _mat_slots[i]
 		if s.count > 0:
+			any_mat = true
 			var tex: Texture2D = ItemIcons.icon(s.id)
 			ui.icon.texture = tex
 			ui.swatch.color = Color(0, 0, 0, 0) if tex != null else VoxelTypes.color_of(s.id)
@@ -340,6 +350,8 @@ func _refresh() -> void:
 			ui.swatch.color = Color(0, 0, 0, 0)
 			ui.count.text = ""
 			ui.panel.tooltip_text = "Empty"
+	if _mat_empty:
+		_mat_empty.visible = not any_mat
 	for rr in _recipe_rows:
 		var r: Dictionary = RECIPES[rr.idx]
 		var kind := String(r.get("kind", "item"))

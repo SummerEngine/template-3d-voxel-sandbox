@@ -211,7 +211,7 @@ func _is_watched() -> bool:
 	match _active.get("kind", ""):
 		"torch": p = _centre(_active.to)
 		_:       p = _centre(_active.cell)
-	if player.global_position.distance_to(p) > 22.0:
+	if player.global_position.distance_squared_to(p) > 484.0:   # 22² — avoid per-frame sqrt
 		return false
 	return not _out_of_view(p)
 

@@ -223,6 +223,13 @@ func _build_settings() -> void:
 	vb.add_child(UITheme.setting_row("Sound FX", 0.0, 1.0, 0.05, GameSettings.sfx, pct, _mm_sfx))
 	vb.add_child(UITheme.setting_row("Look speed", 0.3, 2.5, 0.05, GameSettings.sensitivity, dec, _mm_sens))
 	vb.add_child(UITheme.setting_row("View distance", 2, 8, 1, GameSettings.render_radius, whole, _mm_render))
+	var more := Label.new()
+	more.text = "Key rebinding & Eerie-events toggle: in-game (Esc → Settings)"
+	more.add_theme_font_size_override("font_size", 14)
+	more.add_theme_color_override("font_color", Color(0.8, 0.86, 0.95))
+	more.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	more.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vb.add_child(more)
 	var back := UITheme.make_button("BACK", "primary", Vector2(320, 0))
 	back.pressed.connect(_close_settings)
 	vb.add_child(back)
@@ -261,8 +268,12 @@ func _build_version() -> void:
 
 func _on_option(id: String) -> void:
 	match id:
-		"single", "create":
-			GameState.load_on_start = false
+		"single":
+			GameState.load_on_start = WorldSave.has_save()   # SINGLE PLAYER: resume your world if one exists, else start fresh
+			get_tree().paused = false
+			get_tree().change_scene_to_file("res://scenes/loading.tscn")
+		"create":
+			GameState.load_on_start = false                  # CREATE NEW WORLD: always a fresh start
 			get_tree().paused = false
 			get_tree().change_scene_to_file("res://scenes/loading.tscn")
 		"load":

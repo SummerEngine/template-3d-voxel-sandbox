@@ -583,6 +583,9 @@ func _physics_process(delta: float) -> void:
 					_in_range = true               # just reached the player — wind up, don't hit instantly
 					if _attack_cd < ATTACK_WINDUP:
 						_attack_cd = ATTACK_WINDUP
+					if _snd_groan and _snd_groan.stream and not _snd_groan.playing:
+						_snd_groan.pitch_scale = _voice_pitch * _rng.randf_range(1.05, 1.2)   # tense pre-strike snarl telegraphs the hit
+						_snd_groan.play()
 				elif _attack_cd <= 0.0:
 					_attack_cd = ATTACK_CD
 					_punch = 1.0                       # procedural-rig lunge

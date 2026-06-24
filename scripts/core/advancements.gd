@@ -12,6 +12,7 @@ var _done := {}          # advancement id -> true
 var _rows := {}          # advancement id -> Label
 var _panel: Control
 var open := false
+var _snd_adv: AudioStreamPlayer    # celebratory chime when an advancement / reward is earned
 
 # id, title, desc, and optional reward = an exotic weapon name unlocked on completion.
 const ADV := [
@@ -81,6 +82,9 @@ func _check_all() -> void:
 			_grant(a)
 
 func _grant(a: Dictionary) -> void:
+	if _snd_adv and _snd_adv.stream:
+		_snd_adv.pitch_scale = randf_range(0.97, 1.03)
+		_snd_adv.play()
 	if player.hud and player.hud.has_method("show_toast"):
 		player.hud.show_toast("Advancement: %s!" % a.title, Color(1.0, 0.88, 0.4))
 	if a.has("reward") and player.has_method("unlock_tool"):
@@ -96,6 +100,13 @@ func _build_panel() -> void:
 	_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_panel)
+	_snd_adv = AudioStreamPlayer.new()          # mirrors crafting_ui's UI-sound pattern
+	if ResourceLoader.exists("res://assets/audio/sfx/ui/open.mp3"):
+		_snd_adv.stream = load("res://assets/audio/sfx/ui/open.mp3")
+	_snd_adv.volume_db = -6.0
+	if AudioServer.get_bus_index("SFX") != -1:
+		_snd_adv.bus = "SFX"
+	add_child(_snd_adv)
 
 	var frame := PanelContainer.new()
 	frame.position = Vector2(40, 90)

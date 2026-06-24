@@ -302,7 +302,7 @@ func _give_starter_kit() -> void:
 
 var body_meshes: Array = []   # the player's body meshes (hidden in first person)
 var _viewmodel: Node3D        # held tool shown in front of the camera in first person
-const VM_REST_POS := Vector3(0.3, -0.32, -0.62)   # viewmodel resting offset from camera
+const VM_REST_POS := Vector3(0.3, -0.30, -0.50)   # held closer to the camera so it doesn't reach into terrain when looking down
 const VM_REST_ROT := Vector3(8, 90, -45)          # yaw faces the pick head toward the crosshair; -45 roll counters the baked tilt
 var _vm_phase := 0.0          # bob/sway phase
 var _vm_swing := 0.0          # 1->0 swing progress when mining/attacking
@@ -341,7 +341,7 @@ func _setup_model() -> void:
 ## Everything else is crafted (tiered tools/swords) or unlocked via advancements.
 func _starter_tools() -> Array:
 	var out: Array = []
-	for n in ["Wooden Pickaxe", "Bare Hands"]:
+	for n in ["Wooden Pickaxe", "Heavy Maul", "Bare Hands"]:
 		var w := WeaponRegistry.by_name(n)
 		if not w.is_empty():
 			out.append(w)
@@ -744,11 +744,13 @@ func _build_viewmodel() -> void:
 	# fist, which then becomes the single held object — never shown alongside a weapon.
 	var path := ""
 	var cat := ""
+	var fname := ""
 	if weapon_holder:
 		var w: Dictionary = weapon_holder.current()
 		if not w.is_empty():
 			path = String(w.get("path", ""))
 			cat = String(w.get("category", ""))
+			fname = String(w.get("file", ""))
 	var packed: PackedScene = null
 	if path != "" and ResourceLoader.exists(path):
 		packed = load(path) as PackedScene
@@ -763,12 +765,20 @@ func _build_viewmodel() -> void:
 	var grip := Node3D.new()
 	root.add_child(grip)
 	grip.position = Vector3(0.05, 0.0, 0.02)
+	if fname == "greataxe":
+		grip.position = Vector3(-0.02, 0.22, 0.02)   # lift the big two-hander up into frame (it sits low otherwise)
 	grip.rotation_degrees = VM_REST_ROT
 	grip.add_child(m)
 	var box := _merged_aabb(m)
 	var longest := maxf(box.size.x, maxf(box.size.y, box.size.z))
-	# The pickaxe (the mining tool) is held extra-large so the new model reads boldly in view.
-	var target := 0.85 if cat == "pickaxe" else 0.28
+	# Most weapons are held compactly in the lower-right; the pickaxe (main mining tool) and the
+	# two-handed greataxe are held large so they read boldly — but not so large they poke into
+	# terrain when looking down (now that the viewmodel depth-tests normally).
+	var target := 0.28
+	if cat == "pickaxe" or fname == "maul_heavy":
+		target = 0.74    # the Heavy Maul (a big two-hander) is held large, framed like the pickaxe
+	elif fname == "greataxe":
+		target = 0.62
 	var s := target / longest if longest > 0.0001 else 1.0
 	m.scale = Vector3(s, s, s)
 	# Offset along the weapon's longest axis so the handle runs down toward the lower-right
@@ -782,7 +792,10 @@ func _build_viewmodel() -> void:
 	# Shift ~40% along the handle so the head sits up in view and the handle trails off-screen
 	# toward the corner — reads as a tool being held, not a weapon floating dead-centre.
 	m.position[axis] += box.size[axis] * 0.42 * s
-	_viewmodel_no_clip(m)            # draw the held tool OVER the world so it never sinks into a block
+	# The greataxe's broad bit otherwise faces flat-on and runs off the right edge; spin it around
+	# its own haft (Y) so the head turns to a 3/4 angle and swings back into frame.
+	if fname == "greataxe":
+		m.rotation_degrees.y -= 40.0
 
 ## First-person arm: a generated robot forearm + gripping fist (matches the explorer-bot),
 ## fitted to hand size and posed via a wrapper so the fist sits at the grip and the
@@ -810,24 +823,6 @@ func _build_fp_arm(root: Node3D) -> void:
 	var s := FP_ARM_SIZE / longest if longest > 0.0001 else 1.0
 	arm.scale = Vector3(s, s, s)
 	arm.position = -box.get_center() * s            # centre the model on the wrapper
-	_viewmodel_no_clip(arm)                          # fist also draws over the world, no clipping
-
-## Make the first-person viewmodel ALWAYS draw on top of the world so it never clips INTO a block
-## when you stand against a wall or look down at the ground. Per-surface depth-test-disabled copies
-## keep each part's original colour (wood/steel), and a high render_priority draws it last.
-func _viewmodel_no_clip(n: Node) -> void:
-	if n is MeshInstance3D:
-		var mi := n as MeshInstance3D
-		if mi.mesh:
-			for si in range(mi.mesh.get_surface_count()):
-				var src := mi.get_active_material(si)
-				if src is BaseMaterial3D:
-					var dm: BaseMaterial3D = src.duplicate()
-					dm.no_depth_test = true
-					dm.render_priority = 4
-					mi.set_surface_override_material(si, dm)
-	for c in n.get_children():
-		_viewmodel_no_clip(c)
 
 ## Animate the first-person weapon each frame: a gentle idle sway, a stronger walk bob
 ## synced to movement, and a quick downward chop when mining/attacking (triggered by
@@ -928,6 +923,7 @@ func _physics_process(delta: float) -> void:
 	# Splash when plunging into water (a falling/jumping entry, not a slow wade-in).
 	if in_water and not _was_in_water and velocity.y < -2.0:
 		_emit_burst(global_position + Vector3(0, 0.3, 0), Color(0.72, 0.85, 1.0), 14, 0.5, 82.0, 1.5, 3.8, 6.0)
+		_play_snd(snd_swim)                      # audible splash to match the visual entry burst
 	_was_in_water = in_water
 	if on_floor and not _was_on_floor:
 		if not _landed_once:
@@ -936,6 +932,9 @@ func _physics_process(delta: float) -> void:
 			# A real drop kicks up a dust puff + a small land-thud shake (scaled by fall speed).
 			if _fall_speed > 4.0 and not in_water:
 				_spawn_land_dust()
+				if world_manager:           # material-matched land thud (jump push-off already plays one)
+					var lbt: int = world_manager.get_block(int(global_position.x), int(global_position.y) - 1, int(global_position.z))
+					_play_snd(_step_sound_for(lbt))
 				add_trauma(clampf((_fall_speed - 4.0) * 0.03, 0.0, 0.3))
 				_land_squash = clampf((_fall_speed - 3.0) * 0.06, 0.0, 0.5)   # camera knees-bend dip
 			if _fall_speed > FALL_DAMAGE_SPEED and not in_water:
@@ -989,9 +988,14 @@ func _physics_process(delta: float) -> void:
 			else:
 				velocity.y = lerpf(velocity.y, -1.2, delta * 4.0)
 		elif not on_floor:
-			# Don't fall through ground that hasn't streamed its collider in yet (prevents
-			# a long phantom fall + lethal fall-damage "death from nowhere").
-			velocity.y = 0.0 if _ground_streaming() else velocity.y - gravity * delta
+			if _ground_streaming():
+				# The chunk below hasn't streamed its collider in yet — hold position so we don't
+				# fall through (no phantom long fall / fall-damage "death from nowhere"). Freeze
+				# horizontal motion too: otherwise WASD would drift us across not-yet-ready terrain
+				# while vertical is pinned, which reads as "flying" (e.g. right after a respawn).
+				velocity = Vector3.ZERO
+			else:
+				velocity.y -= gravity * delta
 		elif Input.is_action_pressed("jump") and not ui_open:
 			velocity.y = JUMP_VELOCITY
 			_jump_feedback()
@@ -1201,6 +1205,12 @@ func _try_auto_step(dir: Vector3) -> void:
 	if _solid_at(sx, fy + 1, sz) or _solid_at(sx, fy + 2, sz):
 		return                                   # a wall ≥2 high, not a step — don't hop
 	velocity.y = sqrt(2.0 * gravity * 1.15)      # just enough to clear one block
+	# Auto-step is otherwise silent — give the hop the same soft footstep a jump gets (no dust),
+	# sharing the jump throttle so climbing a slope can't spam it.
+	if _jump_sfx_cd <= 0.0 and world_manager:
+		_jump_sfx_cd = 0.25
+		var bt: int = world_manager.get_block(int(global_position.x), int(global_position.y) - 1, int(global_position.z))
+		_play_snd(_step_sound_for(bt))
 
 ## Sprint widens FOV a touch; walking adds a subtle first-person view bob. Both ease
 ## back to neutral when you stop, so aiming while standing still stays rock-steady.
@@ -1715,6 +1725,8 @@ func _do_respawn() -> void:
 		model.rotation.z = 0.0
 	first_person = _death_prev_fp
 	_apply_view()
+	if pitch_pivot:
+		pitch_pivot.rotation.x = 0.0    # level the view so you see the ground ahead, not the sky
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	if hud and hud.has_method("hide_death"):
 		hud.hide_death()
@@ -1724,6 +1736,19 @@ func _respawn() -> void:
 	flying = false                 # always respawn grounded (creative fly is off until re-toggled)
 	velocity = Vector3.ZERO
 	global_position = spawn_point
+	# Build the ground under the spawn point NOW (the spawn chunk may have been unloaded if we died
+	# far away). preload_around builds the spawn chunks synchronously — build() applies the collider
+	# immediately — and skips any already loaded, so it's nearly free when we died near spawn.
+	if world_manager and world_manager.has_method("preload_around"):
+		var cc := Vector2i(world_manager.chunk_x(int(spawn_point.x)), world_manager.chunk_z(int(spawn_point.z)))
+		world_manager.preload_around(cc)
+	# Place us DIRECTLY on the surface instead of dropping from the air. This guarantees we respawn
+	# standing on the ground regardless of how high spawn_point was or whether a chunk is still
+	# streaming (which would otherwise leave us hovering). surface_height is the terrain top; a solid
+	# block's top face is one above it, so feet sit at surface_height + 1.
+	if world_manager and world_manager.has_method("surface_height"):
+		var g: int = world_manager.surface_height(int(floor(spawn_point.x)), int(floor(spawn_point.z)))
+		global_position.y = float(g) + 1.05
 	_fall_speed = 0.0
 	_was_on_floor = true
 	_landed_once = false

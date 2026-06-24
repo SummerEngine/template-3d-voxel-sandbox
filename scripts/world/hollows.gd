@@ -85,7 +85,7 @@ func _process(delta: float) -> void:
 		var m = _lurkers[i]
 		if not is_instance_valid(m):
 			_lurkers.remove_at(i)
-		elif player and m.global_position.distance_to(player.global_position) > 28.0:
+		elif player and m.global_position.distance_squared_to(player.global_position) > 784.0:   # 28² — avoid per-frame sqrt
 			m.queue_free()
 			_lurkers.remove_at(i)
 	if _collapse_cd > 0.0:

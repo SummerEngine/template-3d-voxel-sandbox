@@ -56,7 +56,9 @@ func _apply() -> void:
 	_sun.look_at_from_position(Vector3.ZERO, -sun_dir, Vector3.UP)
 	_sun.light_energy = maxf(lerpf(0.04, 1.45, daylight), 0.32 * blood)   # eerie red moonlight
 	_sun.light_color = NIGHT_SUN.lerp(DAY_SUN, daylight).lerp(BLOOD_SUN, blood)
-	_sun.shadow_enabled = daylight > 0.1
+	# Always on so shadows fade smoothly with the sun's energy at dawn/dusk instead of popping at a
+	# threshold; near-zero night energy (~0.04) makes them imperceptible.
+	_sun.shadow_enabled = true
 
 	if _env:
 		_env.ambient_light_energy = lerpf(0.18, 1.0, daylight) + 0.2 * blood

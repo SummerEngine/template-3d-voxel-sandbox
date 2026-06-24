@@ -22,6 +22,8 @@ var _placed := 0
 var _pending_guardians: Array = []   # Vector3 spots awaiting a guardian when the player nears
 var _stamped: Dictionary = {}        # grid cells already handled this session — never re-stamp
                                      # (re-stamping a crypt re-added its guardian -> instant respawns)
+var _pending_discovery: Array = []   # [{pos, kind}] awaiting a proximity "you found X" toast
+const DISCOVER_NEAR := 14.0          # blocks: announce once the player is genuinely on the structure
 
 func setup(w, p) -> void:
 	world = w
@@ -31,6 +33,7 @@ func _process(delta: float) -> void:
 	if world == null or player == null or not is_instance_valid(player):
 		return
 	_check_guardians()
+	_check_discoveries()
 	_t -= delta
 	if _t > 0.0:
 		return
@@ -74,7 +77,24 @@ func _try_place(gx: int, gz: int) -> bool:
 		2: _build_obelisk(ax, sy, az)
 		_: _build_cache(ax, sy, az)
 	_fill_loot(chest_cell, kind)
+	_pending_discovery.append({"pos": Vector3(float(ax) + 0.5, float(sy) + 1.0, float(az) + 0.5), "kind": kind})
 	return true
+
+## A "you found it" toast the moment the player gets close to a placed structure — the discovery
+## payoff (mirrors the guardian proximity check below; purely additive HUD feedback).
+func _check_discoveries() -> void:
+	if player == null or player.hud == null or not player.hud.has_method("show_toast"):
+		return
+	for i in range(_pending_discovery.size() - 1, -1, -1):
+		var d = _pending_discovery[i]
+		if player.global_position.distance_squared_to(d.pos) < DISCOVER_NEAR * DISCOVER_NEAR:
+			_pending_discovery.remove_at(i)
+			var msg := "You found a hidden cache."
+			match int(d.kind):
+				0: msg = "You found a ruined tower."
+				1: msg = "A buried crypt — something guards what's inside."
+				2: msg = "A standing obelisk marks this place."
+			player.hud.show_toast(msg, Color(0.95, 0.9, 0.7))
 
 ## Bias which structure a cell gets by biome so regions feel like they "have their own" landmark,
 ## while staying a pure function of the cell hash (deterministic, no RNG, no save field).
