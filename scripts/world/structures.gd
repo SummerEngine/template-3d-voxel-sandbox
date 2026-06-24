@@ -67,13 +67,26 @@ func _try_place(gx: int, gz: int) -> bool:
 	# alone would re-stamp + re-fill loot for looted-but-unbroken chests (infinite-resource exploit).
 	if world.get_block(chest_cell.x, chest_cell.y, chest_cell.z) == VoxelTypes.CHEST:
 		return false
-	var kind := int((h >> 16) % 3)                # 0 tower, 1 crypt, 2 cache
+	var kind := _pick_kind(world.biome_at(ax, az), h)   # biome-biased so regions feel distinct
 	match kind:
 		0: _build_tower(ax, sy, az)
 		1: _build_crypt(ax, sy, az)
+		2: _build_obelisk(ax, sy, az)
 		_: _build_cache(ax, sy, az)
 	_fill_loot(chest_cell, kind)
 	return true
+
+## Bias which structure a cell gets by biome so regions feel like they "have their own" landmark,
+## while staying a pure function of the cell hash (deterministic, no RNG, no save field).
+func _pick_kind(biome: String, h: int) -> int:
+	var r := int((h >> 16) % 4)
+	match biome:
+		"desert", "snow", "mountain":
+			return 2 if r < 2 else 0                      # open/harsh land -> a standing landmark (obelisk/tower)
+		"jungle", "forest":
+			return 1 if r < 2 else (3 if r == 2 else 0)  # overgrown -> buried crypt favoured
+		_:
+			return r                                      # meadow / mixed: full variety
 
 func _put(wx: int, wy: int, wz: int, t: int) -> void:
 	if wy > 0 and wy < world.WORLD_H:
@@ -115,6 +128,20 @@ func _build_cache(ax: int, sy: int, az: int) -> void:
 	_put(ax, sy + 1, az + 1, VoxelTypes.COBBLESTONE)
 	_put(ax, sy + 1, az, VoxelTypes.CHEST)
 
+## A tall tan SAND spire beside an exposed chest — the world's first non-grey, taller-than-a-tower
+## landmark, so a region reads as "marked" from a distance. Chest sits at the canonical chest_cell.
+func _build_obelisk(ax: int, sy: int, az: int) -> void:
+	var cx := ax + 1
+	for dz in range(0, 2):
+		for dx in range(0, 2):
+			_put(cx + dx, sy + 1, az + dz, VoxelTypes.SAND)   # 2x2 footing
+	for y in range(sy + 2, sy + 8):
+		_put(cx, y, az, VoxelTypes.SAND)
+		_put(cx, y, az + 1, VoxelTypes.SAND)                  # 2-wide shaft
+	for y in range(sy + 8, sy + 12):
+		_put(cx, y, az, VoxelTypes.SAND)                      # narrow tip (~11 tall)
+	_put(ax, sy + 1, az, VoxelTypes.CHEST)
+
 ## Stock the chest with tier-appropriate loot — crypts richest, caches modest.
 func _fill_loot(chest_cell: Vector3i, kind: int) -> void:
 	var inv = world.chest_at(chest_cell)
@@ -133,6 +160,14 @@ func _fill_loot(chest_cell: Vector3i, kind: int) -> void:
 			var lo: int = e[1]
 			var span: int = e[2] - e[1] + 1
 			inv.add(int(e[0]), lo + int((seed_h >> (i + 3)) % span))
+	# Crypts: a guaranteed standout + a rare jackpot + a far-distance richer tier, OUTSIDE the slot
+	# roll — so a looted crypt is a real payoff, not just a time-saver for self-craftable items.
+	if kind == 1:
+		inv.add(VoxelTypes.DIAMOND, 1)                                    # always at least one diamond
+		if (seed_h >> 11) % 6 == 0:
+			inv.add(VoxelTypes.DIAMOND, 4 + int((seed_h >> 17) % 5))      # ~1 in 6 crypts: a diamond jackpot
+		if maxi(absi(chest_cell.x), absi(chest_cell.z)) > 600:
+			inv.add(VoxelTypes.GOLD_INGOT, 4 + int((seed_h >> 21) % 6))   # far-flung crypts reward the journey
 
 ## Spawn a crypt guardian only once the player is close, so they don't accumulate far away.
 func _check_guardians() -> void:

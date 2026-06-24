@@ -29,6 +29,7 @@ var _sun: DirectionalLight3D
 var _env: Environment
 var _sky_mat: ShaderMaterial
 var _hostiles: Array = []
+var _stinger: AudioStreamPlayer        # blood-moon sting
 var _rng := RandomNumberGenerator.new()
 
 func _ready() -> void:
@@ -332,6 +333,14 @@ func _setup_sun() -> void:
 func _setup_ambient() -> void:
 	_play_loop("res://assets/audio/music/theme.mp3", -17.0, "Music")    # background theme
 	_play_loop("res://assets/audio/ambient/wind.mp3", -24.0, "Ambient") # soft wind under it
+	# Blood-moon stinger (one-shot, played on the siege-night phase change).
+	_stinger = AudioStreamPlayer.new()
+	if ResourceLoader.exists("res://assets/audio/weather/blood_moon.wav"):
+		_stinger.stream = load("res://assets/audio/weather/blood_moon.wav")
+	_stinger.volume_db = -3.0
+	if AudioServer.get_bus_index("SFX") != -1:
+		_stinger.bus = "SFX"
+	add_child(_stinger)
 
 func _play_loop(path: String, vol_db: float, bus: String = "Master") -> void:
 	if not ResourceLoader.exists(path):
@@ -387,6 +396,8 @@ func _on_phase_changed(is_night: bool) -> void:
 		var count: int = mini(MAX_NIGHT_MOBS, NIGHT_MOB_COUNT + _nights * 2)
 		if blood:
 			count = mini(MAX_NIGHT_MOBS + 6, count + 5)   # they come in force
+			if _stinger and _stinger.stream:
+				_stinger.play()                            # ominous blood-moon sting
 		_spawn_hostiles(count, blood)
 		# On a blood moon, part of the horde erupts straight out of your densest killing grounds.
 		if blood and hauntfields:

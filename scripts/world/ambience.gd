@@ -10,8 +10,10 @@ var player                              # Player
 var day_night                           # DayNight
 
 const AREA := 18.0                      # motes scatter within this radius of the player
+const NIGHT_BED := "res://assets/audio/ambient/night.wav"   # looping crickets/owls bed
 var _fireflies: CPUParticles3D
 var _pollen: CPUParticles3D
+var _night_bed: AudioStreamPlayer       # crossfaded in at night, out by day
 var _star_t := 20.0
 var _rng := RandomNumberGenerator.new()
 
@@ -26,6 +28,19 @@ func _ready() -> void:
 	add_child(_fireflies)
 	add_child(_pollen)
 	_star_t = _rng.randf_range(14.0, 32.0)
+	# Looping night ambience (crickets/owls), faded in only at night via _process.
+	_night_bed = AudioStreamPlayer.new()
+	if ResourceLoader.exists(NIGHT_BED):
+		var s = load(NIGHT_BED)
+		if s is AudioStreamWAV:
+			s.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		_night_bed.stream = s
+	_night_bed.volume_db = -80.0
+	if AudioServer.get_bus_index("Ambient") != -1:
+		_night_bed.bus = "Ambient"
+	add_child(_night_bed)
+	if _night_bed.stream:
+		_night_bed.play()
 
 ## One drifting-mote emitter. firefly=true: glowing yellow-green, hovering; false: soft pale
 ## pollen that sinks and drifts on a breeze. A 0->1->0 alpha ramp makes each mote twinkle in
@@ -80,6 +95,10 @@ func _process(delta: float) -> void:
 	var blocked: bool = player.has_method("atmosphere_blocked") and player.atmosphere_blocked()
 	_fireflies.emitting = night and not blocked
 	_pollen.emitting = (not night) and not blocked
+	# Crossfade the night ambience bed (audible only at night, and not while underground/submerged).
+	if _night_bed and _night_bed.stream:
+		var want := -20.0 if (night and not blocked) else -80.0
+		_night_bed.volume_db = move_toward(_night_bed.volume_db, want, delta * 30.0)
 	if night:
 		_star_t -= delta
 		if _star_t <= 0.0:

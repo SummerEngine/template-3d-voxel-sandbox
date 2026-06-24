@@ -4,7 +4,7 @@
 > (This replaces the old prototype-era design doc — there is no node-per-block world anymore.)
 
 ## 1. What it is
-A Minecraft-style 3D voxel **survival sandbox** on Summer Engine (Godot 4.6, GDScript only,
+A 3D voxel **survival sandbox** on Summer Engine (Godot 4.6, GDScript only,
 Forward+ / D3D12, Jolt physics). Build & break a streamed voxel world, gather/craft/smelt up
 a tool tier, survive escalating night sieges, explore biomes with weather and fauna.
 

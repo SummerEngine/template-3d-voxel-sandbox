@@ -352,6 +352,19 @@ func _compute_ground(ox: int, oz: int, top: int) -> void:
 		for lx in range(-1, CW + 1):
 			surf[(lz + 1) * _sx + (lx + 1)] = _col_height[Vector2i(ox + lx, oz + lz)]
 
+	# Steep slopes should show exposed rock, not a grass/dirt skin (the missing 'real terrain' cue).
+	# Precompute per IN-CHUNK column once — the +/-1 neighbour heights are already in `surf`, so this
+	# adds ZERO noise samples: a column is "steep" if it differs >=2 from any orthogonal neighbour.
+	var steep := PackedByteArray()
+	steep.resize(surf.size())
+	for lz in range(0, CD):
+		for lx in range(0, CW):
+			var si := (lz + 1) * _sx + (lx + 1)
+			var sh: int = surf[si]
+			var dmax: int = maxi(maxi(absi(sh - surf[si - 1]), absi(sh - surf[si + 1])), maxi(absi(sh - surf[si - _sx]), absi(sh - surf[si + _sx])))
+			if dmax >= 2:
+				steep[si] = 1
+
 	# Trees: only a short minable LOG STUMP at each in-chunk tree origin (the full trunk +
 	# canopy is drawn by a per-chunk MultiMesh of the 3D model in _apply — see _tree_sites).
 	# Canopies no longer overhang as voxels, so only origins whose base is in this chunk matter.
@@ -389,6 +402,9 @@ func _compute_ground(ox: int, oz: int, top: int) -> void:
 			for lx in range(-1, CW + 1):
 				var s := surf[sbase + (lx + 1)]
 				var b: int = manager.ground_block(ox + lx, ly, wz, s)
+				# Exposed rock face: on a steep in-chunk column, the top grass/dirt band becomes stone.
+				if steep[sbase + (lx + 1)] == 1 and ly <= s and ly >= s - 3 and (b == VoxelTypes.GRASS or b == VoxelTypes.DIRT):
+					b = VoxelTypes.STONE
 				if has_trees and b == VoxelTypes.AIR and ly > s and ly <= s + manager.TREE_H:
 					var tk := Vector3i(ox + lx, ly, wz)
 					if tree_blocks.has(tk):

@@ -1,6 +1,6 @@
 # 3D Voxel Sandbox — Summer Engine Template
 
-A **Minecraft-style voxel survival sandbox** for [Summer Engine](https://www.summerengine.com)
+A **voxel survival & building sandbox** for [Summer Engine](https://www.summerengine.com)
 (Godot 4.6, GDScript). Clone it, press Play, and you have a complete, optimized voxel game to
 explore — and a clean, documented foundation to build your own on top of.
 

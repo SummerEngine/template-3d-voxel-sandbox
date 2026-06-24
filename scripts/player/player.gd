@@ -217,7 +217,7 @@ func _ready() -> void:
 
 	spawn_point = global_position
 	_landed_once = false
-	_invuln = 2.0                  # brief grace on first spawn / world load
+	_invuln = 4.0                  # grace on first spawn / world load (more room to get bearings on a night load)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	if hud and hud.has_signal("respawn_requested"):
 		hud.respawn_requested.connect(_do_respawn)
@@ -1064,6 +1064,14 @@ func _physics_process(delta: float) -> void:
 		_atmo_blocked = _compute_atmo_blocked()
 		if _dust_motes and is_instance_valid(_dust_motes):
 			_dust_motes.emitting = not _atmo_blocked
+		# Lava sears: standing on/in a lava voxel (the deep-cave pools) burns you (hurt() handles the
+		# cooldown/armor/flash/death). Checked on the same 0.5s throttle so it ticks, not drains.
+		if not _dead and world_manager:
+			var lx := floori(global_position.x)
+			var lz := floori(global_position.z)
+			var ly := floori(global_position.y)
+			if world_manager.get_block(lx, ly, lz) == VoxelTypes.LAVA or world_manager.get_block(lx, ly - 1, lz) == VoxelTypes.LAVA:
+				hurt(2)
 
 	if global_position.y < VOID_Y:
 		# A void plunge restores you (no death screen) — but give it a real beat, not a silent teleport.

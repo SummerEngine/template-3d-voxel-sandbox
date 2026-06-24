@@ -22,7 +22,19 @@ const LOADS_PER_FRAME := 6     # async chunk builds dispatched per frame (they r
 const APPLIES_PER_FRAME := 3   # finished chunk meshes applied to the scene per frame (smooths pop-in)
 
 const CAVE_SQUASH := 1.4       # >1 flattens caves vertically
-const CAVE_THRESHOLD := 0.55   # carve where 3D cave noise exceeds this
+const CAVE_THRESHOLD := 0.26   # carve where 3D cave noise exceeds this. The FBM cave noise rarely tops
+                              # ~0.3, so the old 0.55 carved almost nothing (caves were near-nonexistent);
+                              # 0.26 yields real, connected cave systems for the lurker/hollows layer.
+# Biome thresholds — shared consts so EVERY biome test stays in lockstep (a desync between, say,
+# _is_desert and the sand surface gives sand columns with forest trees). temp/moist are FBM noise
+# remapped to ~0..1 but bell-shaped, so thresholds pulled too far out make a biome never appear.
+const SNOW_T := 0.38           # below this temperature = snowy lowlands
+const DESERT_T := 0.55         # hot AND dry -> desert
+const DESERT_M := 0.45
+const JUNGLE_T := 0.55         # hot AND wet -> jungle
+const JUNGLE_M := 0.60
+const FOREST_M := 0.55         # wet -> forest / woods
+const SAVANNA_M := 0.40        # mid-wet -> scattered savanna trees; below = open meadow
 const TREE_R := 3              # max tree canopy radius (jungle)
 # Vertical voxel headroom a chunk meshes/scans above ground for a tree. Canopies are now 3D
 # models (not voxels), so the only tree voxel is the 2-block stump — this just needs to clear
@@ -152,6 +164,10 @@ func _solid_block(wx: int, wy: int, wz: int, s: int) -> int:
 	if wy >= 2 and wy <= s - 3:
 		var c := cave_noise.get_noise_3d(float(wx), float(wy) * CAVE_SQUASH, float(wz))
 		if c > CAVE_THRESHOLD:
+			# Deep carved cells pool lava — lights caves via the emissive atlas tile + HDR glow,
+			# and gives the Resonator ping (and the previously-dead lava branch) something real.
+			if wy <= 8 and _hash3(wx, wy, wz) % 3 == 0:
+				return VoxelTypes.LAVA
 			return VoxelTypes.AIR
 	if wy == s:
 		return _surface_block(wx, wz, s)
@@ -168,7 +184,7 @@ func _surface_block(wx: int, wz: int, s: int) -> int:
 		return VoxelTypes.SNOW
 	if s >= MOUNTAIN_ROCK:
 		return VoxelTypes.STONE
-	if _temp01(wx, wz) < 0.30:
+	if _temp01(wx, wz) < SNOW_T:
 		return VoxelTypes.SNOW                       # cold lowlands / snow hills
 	if _is_desert(wx, wz):
 		var ov := oasis_noise.get_noise_2d(float(wx), float(wz))
@@ -195,7 +211,7 @@ func _moist01(wx: int, wz: int) -> float:
 
 ## Hot AND dry → desert.
 func _is_desert(wx: int, wz: int) -> bool:
-	return _temp01(wx, wz) > 0.60 and _moist01(wx, wz) < 0.40
+	return _temp01(wx, wz) > DESERT_T and _moist01(wx, wz) < DESERT_M
 
 ## Biome label for a column (used by weather + fauna). Height wins for water/mountain/
 ## snow-cap; otherwise temperature + moisture pick desert / jungle / forest / meadow / snow.
@@ -209,13 +225,13 @@ func biome_at(wx: int, wz: int) -> String:
 		return "mountain"
 	var t := _temp01(wx, wz)
 	var m := _moist01(wx, wz)
-	if t < 0.30:
+	if t < SNOW_T:
 		return "snow"
-	if t > 0.60 and m < 0.40:
+	if t > DESERT_T and m < DESERT_M:
 		return "desert"
-	if t > 0.58 and m > 0.66:
+	if t > JUNGLE_T and m > JUNGLE_M:
 		return "jungle"
-	if m > 0.62:
+	if m > FOREST_M:
 		return "forest"
 	return "meadow"                      # broad temperate middle = open green plains
 
@@ -232,27 +248,27 @@ func _ore_or_stone(wx: int, wy: int, wz: int) -> int:
 func is_tree(cx: int, cz: int) -> bool:
 	var t := _temp01(cx, cz)
 	var m := _moist01(cx, cz)
-	if t > 0.60 and m < 0.40:
+	if t > DESERT_T and m < DESERT_M:
 		# Desert: palms only on the oasis greenery ring (matches the grass band), never bare sand.
 		if oasis_noise.get_noise_2d(float(cx), float(cz)) <= 0.62:
 			return false
 		return (_hash2(cx, cz) % 8) == 0
-	if t < 0.30:
+	if t < SNOW_T:
 		return (_hash2(cx, cz) % 30) == 0    # snowy: sparse conifers
 	var rarity := 0
-	if t > 0.58 and m > 0.66:   rarity = 7    # jungle — very dense
-	elif m > 0.62:              rarity = 16   # forest / woods
-	elif m > 0.45:              rarity = 44   # scattered savanna trees
-	else:                       return false  # open meadow / plains stay treeless
+	if t > JUNGLE_T and m > JUNGLE_M:   rarity = 7    # jungle — very dense
+	elif m > FOREST_M:                  rarity = 16   # forest / woods
+	elif m > SAVANNA_M:                 rarity = 44   # scattered savanna trees
+	else:                               return false  # open meadow / plains stay treeless
 	return (_hash2(cx, cz) % rarity) == 0
 
 func is_jungle(cx: int, cz: int) -> bool:
-	return _temp01(cx, cz) > 0.58 and _moist01(cx, cz) > 0.66
+	return _temp01(cx, cz) > JUNGLE_T and _moist01(cx, cz) > JUNGLE_M
 
 ## Which 3D model a tree at this column uses: 1 = palm (desert oasis), 0 = broadleaf tree
 ## (forest / jungle / savanna / conifer). Only meaningful where is_tree() is true.
 func tree_kind(cx: int, cz: int) -> int:
-	if _temp01(cx, cz) > 0.60 and _moist01(cx, cz) < 0.40:
+	if _temp01(cx, cz) > DESERT_T and _moist01(cx, cz) < DESERT_M:
 		return 1
 	return 0
 
