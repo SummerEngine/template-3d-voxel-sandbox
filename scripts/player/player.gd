@@ -341,7 +341,7 @@ func _setup_model() -> void:
 ## Everything else is crafted (tiered tools/swords) or unlocked via advancements.
 func _starter_tools() -> Array:
 	var out: Array = []
-	for n in ["Wooden Pickaxe", "Heavy Maul", "Bare Hands"]:
+	for n in ["Heavy Maul"]:
 		var w := WeaponRegistry.by_name(n)
 		if not w.is_empty():
 			out.append(w)
