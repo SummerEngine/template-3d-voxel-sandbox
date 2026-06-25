@@ -585,7 +585,7 @@ func _quad(positions: PackedVector3Array, normals: PackedVector3Array, colors: P
 	positions.push_back(p1)
 	positions.push_back(p2)
 	positions.push_back(p3)
-	for k in range(4):
+	for k in 4:   # `in 4` iterates the int with no transient range() array (called once per merged quad)
 		normals.push_back(nrm)
 		colors.push_back(col)
 	uvs.push_back(Vector2(0.0, 0.0))

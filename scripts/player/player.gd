@@ -138,6 +138,8 @@ var _respawn_grace := 0.0       # secs after a respawn/load where gravity still 
 var _air_time := 0.0            # secs continuously off the floor. The airborne (jump/fall) animation
                                 # only plays once this passes a small threshold, so a hair-thin gap
                                 # right after a respawn doesn't read as a "flying" pose on the ground.
+var _cross_state := -1          # last crosshair state pushed to the HUD — gate so we don't rewrite the
+                                # Label.modulate every frame while aim sits on the same target.
 var _ext_push := Vector3.ZERO   # one-frame external shove (e.g. mob knockback), applied with collision
 var _regen_block := 0.0         # seconds remaining where passive health regen is suppressed (post-hit)
 
@@ -954,8 +956,8 @@ func _physics_process(delta: float) -> void:
 	if _respawn_grace > 0.0:
 		_respawn_grace = maxf(0.0, _respawn_grace - delta)
 	var on_floor := is_on_floor()
-	_air_time = 0.0 if (on_floor or _in_water()) else _air_time + delta   # for the airborne-pose threshold
-	var in_water := _in_water()
+	var in_water := _in_water()   # one terrain-noise eval; reused below (was computed twice)
+	_air_time = 0.0 if (on_floor or in_water) else _air_time + delta   # for the airborne-pose threshold
 	_update_underwater_audio()
 	# Splash when plunging into water (a falling/jumping entry, not a slow wade-in).
 	if in_water and not _was_in_water and velocity.y < -2.0:
@@ -1607,17 +1609,26 @@ func _update_highlight() -> void:
 		if collider and collider is Node and (collider as Node).is_in_group("mob"):
 			highlight.visible = false
 			_hide_crack()
-			if hud and hud.has_method("set_crosshair_state"): hud.set_crosshair_state(2)   # aiming at a mob
+			_push_cross_state(2)   # aiming at a mob
 			return
 		var cell := _cell_from_hit(-0.5)
 		highlight.global_position = Vector3(cell)
 		highlight.visible = true
 		_update_crack(cell)
-		if hud and hud.has_method("set_crosshair_state"): hud.set_crosshair_state(1)       # a block in reach
+		_push_cross_state(1)       # a block in reach
 	else:
 		highlight.visible = false
 		_hide_crack()
-		if hud and hud.has_method("set_crosshair_state"): hud.set_crosshair_state(0)       # nothing in reach
+		_push_cross_state(0)       # nothing in reach
+
+## Only push the crosshair state to the HUD when it actually changes (most frames it's identical,
+## so this skips a per-frame has_method lookup + Label.modulate rewrite). Visual result unchanged.
+func _push_cross_state(s: int) -> void:
+	if s == _cross_state:
+		return
+	_cross_state = s
+	if hud and hud.has_method("set_crosshair_state"):
+		hud.set_crosshair_state(s)
 
 func _update_crack(cell: Vector3i) -> void:
 	if _crack == null:

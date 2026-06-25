@@ -379,14 +379,20 @@ func _update_lightning(delta: float) -> void:
 			tw_t.tween_interval(randf_range(0.4, 1.8))
 			tw_t.tween_callback(_snd_thunder.play)
 
-var _label_cache := ""
+var _label_sig := -1
 func _apply_label() -> void:
 	if not _label:
 		return
-	var t := "%s  ·  %s" % [SEASON_NAMES[season], _condition_text()]
-	if t != _label_cache:                        # runs every frame; only touch the Label when it changes
-		_label_cache = t
-		_label.text = t
+	# Runs every frame. Build a cheap integer signature from ONLY the band-quantized inputs that can
+	# change the text (the bands mirror _condition_text's thresholds exactly), and skip the String
+	# format + Label write unless that signature changes — no per-frame throwaway String alloc.
+	var cloud_band := (0 if _cloud < 0.25 else (1 if _cloud < 0.50 else (2 if _cloud < 0.72 else 3)))
+	var intense_band := 1 if _intensity > 0.45 else 0
+	var sig := int(season) * 1000 + int(weather) * 100 + cloud_band * 10 + intense_band
+	if sig == _label_sig:
+		return
+	_label_sig = sig
+	_label.text = "%s  ·  %s" % [SEASON_NAMES[season], _condition_text()]
 
 func _condition_text() -> String:
 	match weather:

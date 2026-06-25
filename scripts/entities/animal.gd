@@ -301,13 +301,15 @@ func _physics_process(delta: float) -> void:
 func _compute_separation() -> void:
 	_sep = Vector3.ZERO
 	var count := 0
+	var r2 := SEP_RADIUS * SEP_RADIUS   # compare squared distances; skip the sqrt for the far majority
 	for m in get_tree().get_nodes_in_group("mob"):
 		if m == self or not is_instance_valid(m):
 			continue
 		var d: Vector3 = global_position - (m as Node3D).global_position
 		d.y = 0.0
-		var dist := d.length()
-		if dist > 0.05 and dist < SEP_RADIUS:
+		var ds := d.length_squared()
+		if ds > 0.0025 and ds < r2:            # 0.0025 == 0.05²; ds<r2 ⇔ dist<SEP_RADIUS (monotonic)
+			var dist := sqrt(ds)
 			_sep += d / dist * (SEP_RADIUS - dist)   # closer neighbours push harder
 			count += 1
 			if count >= 6:

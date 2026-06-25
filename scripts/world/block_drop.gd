@@ -88,14 +88,16 @@ func _physics_process(delta: float) -> void:
 
 	if player and is_instance_valid(player):
 		var to: Vector3 = player.global_position + Vector3(0, 0.8, 0) - global_position
-		var d := to.length()
-		if d < MAGNET_RADIUS and _age > 0.35:
-			global_position += to.normalized() * minf(d, MAGNET_SPEED * delta)
-		if d < PICKUP_RADIUS and _age > 0.3:
-			var taken := 1
-			if player.has_method("collect_item"):
-				taken = player.collect_item(block_id, 1)
-			if taken > 0:
-				if player.has_method("_emit_burst"):
-					player._emit_burst(global_position, Color(0.95, 0.82, 0.35), 6, 0.35, 70.0, 0.6, 1.6, 3.0)   # warm pickup poof
-				queue_free()        # only despawn if it actually fit; else wait on the ground
+		var ds := to.length_squared()
+		if ds < MAGNET_RADIUS * MAGNET_RADIUS:   # square-test first; skip the sqrt when out of magnet range (the common case)
+			var d := sqrt(ds)
+			if _age > 0.35:
+				global_position += to.normalized() * minf(d, MAGNET_SPEED * delta)
+			if d < PICKUP_RADIUS and _age > 0.3:
+				var taken := 1
+				if player.has_method("collect_item"):
+					taken = player.collect_item(block_id, 1)
+				if taken > 0:
+					if player.has_method("_emit_burst"):
+						player._emit_burst(global_position, Color(0.95, 0.82, 0.35), 6, 0.35, 70.0, 0.6, 1.6, 3.0)   # warm pickup poof
+					queue_free()        # only despawn if it actually fit; else wait on the ground

@@ -287,6 +287,14 @@ func _setup_environment() -> void:
 	_sky_mat.set_shader_parameter("star_amount", 0.0)
 	var sky := Sky.new()
 	sky.sky_material = _sky_mat
+	# The sky shader animates every frame (stars/clouds/blood-moon) and DayNight rewrites its colors
+	# each frame, so with AMBIENT_SOURCE_SKY the radiance cubemap (which feeds only the low-frequency
+	# diffuse ambient — nothing samples it for reflections) would regenerate near every frame. Amortize
+	# that across frames and halve its resolution: the visible sky dome is drawn directly by the shader
+	# (unchanged), only the ambient-lighting input updates more cheaply. Over the 8-min day cycle the
+	# per-frame ambient delta is tiny, so the spread is imperceptible.
+	sky.process_mode = Sky.PROCESS_MODE_INCREMENTAL
+	sky.radiance_size = Sky.RADIANCE_SIZE_128
 	_env = Environment.new()
 	_env.background_mode = Environment.BG_SKY
 	_env.sky = sky
