@@ -176,7 +176,7 @@ func _build_gear() -> void:
 	add_child(gear)
 
 func _build_music() -> void:
-	const MUSIC := "res://assets/audio/music/theme.mp3"
+	const MUSIC := "res://assets/audio/music/menu_theme.mp3"
 	if not ResourceLoader.exists(MUSIC):
 		return
 	var stream := load(MUSIC) as AudioStreamMP3

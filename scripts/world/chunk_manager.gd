@@ -307,6 +307,34 @@ func solid_top_y(wx: int, wz: int) -> int:
 		above_open = not solid
 	return 0
 
+## A clean, grounded RESPAWN position near (x,z). solid_top_y alone is not enough: at a tree
+## column it returns the top of the 2-tall minable WOOD stump (the canopy is a collider-less 3D
+## model), so the player would respawn PERCHED on a 1-wide wood pole under the leaves — which
+## reads as "respawned in the sky." We instead spiral out (Chebyshev rings) to the nearest column
+## that is dry land AND treeless, and stand on its real surface — open ground, every time. Only a
+## handful of columns are scanned (trees are sparse, so r<=4 nearly always hits clear ground);
+## falls back to the centre column's solid_top_y if somehow boxed in by trees/water.
+func find_spawn_ground(x: float, z: float) -> Vector3:
+	var ox := floori(x)
+	var oz := floori(z)
+	for r in range(0, 5):
+		for dz in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				if r > 0 and absi(dx) != r and absi(dz) != r:
+					continue                      # only this ring's border (r==0 is the centre cell)
+				var cx := ox + dx
+				var cz := oz + dz
+				if is_tree(cx, cz):
+					continue                      # never stand on a tree column (the stump pole)
+				if surface_height(cx, cz) <= SEA_LEVEL:
+					continue                      # dry land only — no ocean/lake spawns
+				var top := solid_top_y(cx, cz)    # treeless column -> the real terrain top (cave/edit aware)
+				if top <= 0:
+					continue
+				return Vector3(float(cx) + 0.5, float(top) + 1.05, float(cz) + 0.5)
+	# Boxed in (all-trees / all-water nearby): best effort on the original column.
+	return Vector3(float(ox) + 0.5, float(solid_top_y(ox, oz)) + 1.05, float(oz) + 0.5)
+
 func set_block(wx: int, wy: int, wz: int, t: int, s: int = -9999) -> void:
 	if wy <= 0 or wy >= WORLD_H:
 		return                                  # never edit the bedrock floor

@@ -12,9 +12,13 @@ var _has_atmo := false                  # cached: does the player expose atmosph
 
 const AREA := 18.0                      # motes scatter within this radius of the player
 const NIGHT_BED := "res://assets/audio/ambient/night.wav"   # looping crickets/owls bed
+const MUSIC_DAY := "res://assets/audio/music/day_explore.mp3"     # peaceful day exploration loop
+const MUSIC_NIGHT := "res://assets/audio/music/night_tension.mp3" # tense night loop
 var _fireflies: CPUParticles3D
 var _pollen: CPUParticles3D
 var _night_bed: AudioStreamPlayer       # crossfaded in at night, out by day
+var _music_day: AudioStreamPlayer       # day/night gameplay music on the Music bus, crossfaded by time of day
+var _music_night: AudioStreamPlayer
 var _star_t := 20.0
 var _rng := RandomNumberGenerator.new()
 
@@ -43,6 +47,25 @@ func _ready() -> void:
 	add_child(_night_bed)
 	if _night_bed.stream:
 		_night_bed.play()
+	# Day/night gameplay music — two looping tracks on the Music bus, crossfaded by time of day.
+	_music_day = _make_music(MUSIC_DAY)
+	_music_night = _make_music(MUSIC_NIGHT)
+
+## A looping music track on the Music bus, started silent (crossfaded in by _process).
+func _make_music(path: String) -> AudioStreamPlayer:
+	var p := AudioStreamPlayer.new()
+	if ResourceLoader.exists(path):
+		var s = load(path)
+		if s is AudioStreamMP3:
+			s.loop = true
+		p.stream = s
+	p.volume_db = -80.0
+	if AudioServer.get_bus_index("Music") != -1:
+		p.bus = "Music"
+	add_child(p)
+	if p.stream:
+		p.play()
+	return p
 
 ## One drifting-mote emitter. firefly=true: glowing yellow-green, hovering; false: soft pale
 ## pollen that sinks and drifts on a breeze. A 0->1->0 alpha ramp makes each mote twinkle in
@@ -101,6 +124,12 @@ func _process(delta: float) -> void:
 	if _night_bed and _night_bed.stream:
 		var want := -20.0 if (night and not blocked) else -80.0
 		_night_bed.volume_db = move_toward(_night_bed.volume_db, want, delta * 30.0)
+	# Crossfade the gameplay music: peaceful by day, tense by night (plays underground too — music,
+	# unlike the ambience bed, isn't gated on cover).
+	if _music_day and _music_day.stream:
+		_music_day.volume_db = move_toward(_music_day.volume_db, -80.0 if night else -16.0, delta * 8.0)
+	if _music_night and _music_night.stream:
+		_music_night.volume_db = move_toward(_music_night.volume_db, -13.0 if night else -80.0, delta * 8.0)
 	if night:
 		_star_t -= delta
 		if _star_t <= 0.0:

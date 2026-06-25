@@ -300,25 +300,29 @@ func _apply_visuals(_delta: float) -> void:
 		_sky.set_shader_parameter("cloud_time", _cloud_drift)
 
 	var k := _intensity
-	var fog := BASE_FOG + _cloud * 0.012
+	# Weather fog adds onto the clear baseline (BASE_FOG) which already veils the render edge.
+	# These additions are kept MODEST: in Godot's exp fog, density ~0.08 fogs terrain only ~40
+	# blocks out to ~95%, which washes the near/mid field into "where did the blocks go" soup.
+	# Halved from the old values so storms/snow still read atmospheric but you can SEE the terrain.
+	var fog := BASE_FOG + _cloud * 0.008
 	var wcol := Color(0, 0, 0, 0)
 	var dim := lerpf(1.0, 0.62, _cloud)            # cloudy days are dimmer
 	match weather:
 		Weather.RAIN:
-			fog += 0.05 * k
+			fog += 0.022 * k
 			wcol = Color(0.22, 0.27, 0.36, 0.20 * k)
 			dim *= lerpf(1.0, 0.78, k)
 		Weather.STORM:
-			fog += 0.06 * k
+			fog += 0.03 * k
 			wcol = Color(0.12, 0.14, 0.20, 0.34 * k)
 			dim *= lerpf(1.0, 0.55, k)
 		Weather.SANDSTORM:
-			fog = lerpf(BASE_FOG, 0.165, k)
+			fog = lerpf(BASE_FOG, 0.09, k)         # thick haze, still a thick sandstorm — not a total whiteout
 			wcol = Color(0.86, 0.60, 0.32, 0.46 * k)
 			dim = lerpf(1.0, 0.70, k)
 			_env.fog_light_color = Color(0.86, 0.62, 0.34)
 		Weather.SNOW:
-			fog += 0.045 * k
+			fog += 0.02 * k
 			wcol = Color(0.82, 0.86, 0.95, 0.20 * k)
 			dim *= lerpf(1.0, 0.86, k)
 		_:

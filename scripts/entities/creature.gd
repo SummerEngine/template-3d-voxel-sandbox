@@ -395,7 +395,7 @@ static func _flash_mat() -> StandardMaterial3D:
 		m.albedo_color = Color(1, 1, 1)
 		m.emission_enabled = true
 		m.emission = Color(1, 1, 1)
-		m.emission_energy_multiplier = 2.0
+		m.emission_energy_multiplier = 3.8   # blooms over the glow HDR threshold for a frame
 		_FLASH_MAT = m
 	return _FLASH_MAT
 
@@ -407,7 +407,7 @@ func flash() -> void:
 		if is_instance_valid(m):
 			m.material_override = mat
 	var tw := create_tween()
-	tw.tween_interval(0.09)
+	tw.tween_interval(0.12)
 	tw.tween_callback(_clear_flash)
 
 func _clear_flash() -> void:

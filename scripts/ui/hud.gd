@@ -523,13 +523,19 @@ func set_crosshair_state(s: int) -> void:
 		1: _cross.modulate = Color(1, 1, 1, 1.0)
 		_: _cross.modulate = Color(1, 1, 1, 0.5)
 
-## A brief red "x" over the crosshair when an attack lands on a mob.
-func hit_marker() -> void:
+## A brief "✕" that POPS over the crosshair when an attack lands; bigger/brighter on a heavy/lethal blow.
+func hit_marker(heavy := false) -> void:
 	if _hitmark == null:
 		return
-	_hitmark.modulate = Color(1.0, 0.35, 0.3, 1.0)
+	_hitmark.pivot_offset = _hitmark.size * 0.5   # centre the scale pivot so the pop stays on the crosshair
+	var peak := 1.7 if heavy else 1.35
+	var dur := 0.30 if heavy else 0.22
+	_hitmark.modulate = Color(1.0, 0.85, 0.8, 1.0) if heavy else Color(1.0, 0.35, 0.3, 1.0)
+	_hitmark.scale = Vector2(peak, peak)
 	var tw := create_tween()
-	tw.tween_property(_hitmark, "modulate:a", 0.0, 0.22)
+	tw.set_parallel(true)
+	tw.tween_property(_hitmark, "scale", Vector2.ONE, dur).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(_hitmark, "modulate:a", 0.0, dur)
 
 ## Turn the breathing blood-moon vignette on/off (driven by main on the night phase change).
 func set_blood_moon(on: bool) -> void:

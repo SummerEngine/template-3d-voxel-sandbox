@@ -72,7 +72,7 @@ var manager                      # ChunkManager
 var coord: Vector2i
 var _mesh_instance: MeshInstance3D
 var _body: StaticBody3D
-var _col_height: Dictionary = {} # Vector2i(wx,wz) -> surface height (cached per build)
+var _col_height: PackedInt32Array = PackedInt32Array()  # packed per-column surface heights (chunk + 1-voxel border), index (lz+1)*_sx+(lx+1)
 
 # Per-build voxel cache: every block (incl. a 1-voxel border, edits and trees) is
 # computed ONCE here, then the greedy mesher reads this flat array instead of
@@ -188,12 +188,13 @@ func _prepare(overrides_src: Dictionary) -> Array:
 	var oz := coord.y * CD
 	# Surface heights for this chunk's columns (+1 border ring) and the tallest point we
 	# must mesh up to (covers terrain and any tall edits).
-	_col_height.clear()
+	if _col_height.size() != _sz * _sx:
+		_col_height.resize(_sz * _sx)
 	var max_y := 0
 	for lz in range(-1, CD + 1):
 		for lx in range(-1, CW + 1):
 			var s: int = manager.surface_height(ox + lx, oz + lz)
-			_col_height[Vector2i(ox + lx, oz + lz)] = s
+			_col_height[(lz + 1) * _sx + (lx + 1)] = s
 			if s > max_y:
 				max_y = s
 	for key in overrides_src.keys():
@@ -309,6 +310,7 @@ func _add_multimesh(mesh: Mesh, xforms: Array) -> void:
 		mm.set_instance_transform(i, xforms[i])
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = mm
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF   # foliage skips the sun shadow pass (stylized canopies) — saves a GPU pass over all tree tris
 	_foliage.add_child(mmi)
 
 ## Compute the whole chunk (plus a 1-voxel border) once: ground terrain from the
@@ -345,12 +347,8 @@ func _compute_ground(ox: int, oz: int, top: int) -> void:
 	_ground_cache = PackedInt32Array()
 	_ground_cache.resize((top + 1) * _sz * _sx)
 
-	# Surfaces for the chunk + border, packed (avoids a Vector2i + dict lookup per voxel).
-	var surf := PackedInt32Array()
-	surf.resize(_sz * _sx)
-	for lz in range(-1, CD + 1):
-		for lx in range(-1, CW + 1):
-			surf[(lz + 1) * _sx + (lx + 1)] = _col_height[Vector2i(ox + lx, oz + lz)]
+	# _col_height is already the packed per-column surface array (filled in _prepare); read-only here.
+	var surf := _col_height
 
 	# Steep slopes should show exposed rock, not a grass/dirt skin (the missing 'real terrain' cue).
 	# Precompute per IN-CHUNK column once — the +/-1 neighbour heights are already in `surf`, so this

@@ -34,6 +34,8 @@ const RIG_HUNCH := -0.14          # resting forward lean — a shambling posture
 var gravity: float = float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
 var health := 10
 var damage := DAMAGE              # scaled up on harder nights by main.gd
+var smarts := 1.0                 # day-scaled intelligence: farther sight, quicker closing, relentless pursuit (set by main.gd)
+var _alerted := false             # once it has spotted you it keeps coming within an extended range (pursuit memory)
 var player                       # Player
 var world                        # ChunkManager — for edge/water avoidance
 var force_model := -1            # debug: pin to MODEL_PATHS[i] instead of the weighted pick (-1 = off)
@@ -358,7 +360,7 @@ static func _flash_mat() -> StandardMaterial3D:
 		m.albedo_color = Color(1, 1, 1)
 		m.emission_enabled = true
 		m.emission = Color(1, 1, 1)
-		m.emission_energy_multiplier = 2.0
+		m.emission_energy_multiplier = 3.8   # well over the glow HDR threshold so the silhouette blooms white for a frame
 		_FLASH_MAT = m
 	return _FLASH_MAT
 
@@ -371,7 +373,7 @@ func flash() -> void:
 		if is_instance_valid(m):
 			m.material_override = mat
 	var tw := create_tween()
-	tw.tween_interval(0.09)
+	tw.tween_interval(0.12)
 	tw.tween_callback(_clear_flash)
 
 func _clear_flash() -> void:
@@ -511,6 +513,11 @@ func _die() -> void:
 	if _dying:
 		return                            # already dying — never topple/drop/emit twice
 	_dying = true
+	# Death rattle: one final low, fading groan so the kill (the best combat beat) actually LANDS.
+	# Lower pitch than the alive groan; _dying gates it to exactly once.
+	if _snd_groan and _snd_groan.stream:
+		_snd_groan.pitch_scale = _voice_pitch * _rng.randf_range(0.5, 0.65)
+		_snd_groan.play()
 	velocity = Vector3.ZERO
 	if _anim_player:
 		_anim_player.stop()           # freeze the clip so the corpse doesn't walk while toppling
@@ -574,8 +581,12 @@ func _physics_process(delta: float) -> void:
 		var to: Vector3 = player.global_position - global_position
 		var flat := Vector3(to.x, 0.0, to.z)
 		var dist := flat.length()
-		if dist < SIGHT_RANGE:
+		var sight := SIGHT_RANGE * smarts
+		if _alerted:
+			sight *= 1.6                        # already spotted you — it keeps coming (relentless pursuit memory)
+		if dist < sight:
 			chasing = true
+			_alerted = true
 			if dist > 0.05:
 				_dir = flat.normalized()
 			if dist < ATTACK_RANGE and absf(to.y) < 1.6:
@@ -603,6 +614,7 @@ func _physics_process(delta: float) -> void:
 
 	if not chasing:
 		_in_range = false              # out of sight — a fresh approach earns a new first-hit wind-up
+		_alerted = false               # truly lost you (beyond even the extended pursuit range)
 		_timer -= delta
 		if _timer <= 0.0:
 			_pick_dir()
@@ -629,6 +641,8 @@ func _physics_process(delta: float) -> void:
 		_sep_t = 0.2
 		_compute_separation()
 	var spd := (CHASE_SPEED if chasing else SPEED) * _speed_mul   # brutes slow, runners fast
+	if chasing:
+		spd *= clampf(smarts, 1.0, 1.25)                          # a smarter, later-night horde closes in quicker
 	velocity.x = _dir.x * spd + _knockback.x + _sep.x
 	velocity.z = _dir.z * spd + _knockback.z + _sep.z
 	_knockback = _knockback.lerp(Vector3.ZERO, delta * 8.0)   # shove decays fast

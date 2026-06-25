@@ -447,6 +447,7 @@ func _spawn_hostiles(n: int, blood := false) -> void:
 			"runner": is_runner,
 			"hp": (10 + bonus_hp) * (3 if is_brute else 1) - (4 if is_runner else 0),  # runners are frail
 			"dmg": (1 + bonus_dmg) + (2 if is_brute else 0),   # toned down — zombies were too punishing
+			"smarts": clampf(1.0 + float(_nights) * 0.05, 1.0, 1.5),   # each surviving night: sense you farther + close in quicker + pursue longer
 		})
 
 ## Instantiate one queued siege mob around the player's CURRENT position (so a staggered spawn
@@ -470,6 +471,7 @@ func _spawn_one_hostile(spec: Dictionary) -> void:
 	mob.day_night = day_night          # so it burns if it's still out under open sky at dawn
 	mob.health = int(spec.hp)
 	mob.damage = int(spec.dmg)
+	mob.smarts = float(spec.get("smarts", 1.0))
 	mob.position = Vector3(mx, float(my), mz)
 	add_child(mob)
 	_hostiles.append(mob)

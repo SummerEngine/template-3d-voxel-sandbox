@@ -93,11 +93,13 @@ var _crack: MeshInstance3D
 var _crack_mat: ShaderMaterial
 
 var _swing_cd := 0.0
+var _hitstop_active := false   # guards overlapping heavy hits from restoring time_scale early
 var _place_cd := 0.0
 var _last_space_ms := 0
 var _step_timer := 0.0
 var _bob_phase := 0.0
 var _land_squash := 0.0       # 1->0 camera dip on landing, scaled by fall speed
+var _idle_breath := 0.0       # continuous phase for subtle idle camera breathing
 var _rmb_down := false
 var _dead := false
 var _death_prev_fp := true       # view to restore after the death cam
@@ -133,6 +135,9 @@ var _landed_once := false
 var _respawn_grace := 0.0       # secs after a respawn/load where gravity still applies even if the
                                 # feet chunk reads not-ready — so the streaming guard can NEVER pin us
                                 # mid-air (the recurring "respawn in the sky" bug). See _physics_process.
+var _air_time := 0.0            # secs continuously off the floor. The airborne (jump/fall) animation
+                                # only plays once this passes a small threshold, so a hair-thin gap
+                                # right after a respawn doesn't read as a "flying" pose on the ground.
 var _ext_push := Vector3.ZERO   # one-frame external shove (e.g. mob knockback), applied with collision
 var _regen_block := 0.0         # seconds remaining where passive health regen is suppressed (post-hit)
 
@@ -155,6 +160,8 @@ var _vfx_pool: Array[CPUParticles3D] = []
 var _vfx_i := 0
 static var _vfx_mesh: BoxMesh
 static var _vfx_mat: StandardMaterial3D
+static var _vfx_scale_curve: Curve     # shrink-to-nothing over particle life
+static var _vfx_alpha_ramp: Gradient   # fade-out over life (multiplies the per-burst tint)
 var snd_break_soft: AudioStreamPlayer
 var snd_break_hard: AudioStreamPlayer
 var snd_break_dirt: AudioStreamPlayer
@@ -309,6 +316,8 @@ const VM_REST_POS := Vector3(0.3, -0.30, -0.50)   # held closer to the camera so
 const VM_REST_ROT := Vector3(8, 90, -45)          # yaw faces the pick head toward the crosshair; -45 roll counters the baked tilt
 var _vm_phase := 0.0          # bob/sway phase
 var _vm_swing := 0.0          # 1->0 swing progress when mining/attacking
+var _vm_swing_spd := 1.5      # attack_speed of the in-flight swing (drives FP chop weight)
+var _vm_heavy := 0.0          # 0..1 ponderousness of the in-flight swing (maul/axe/hammer/mace)
 var _vm_place := 0.0          # 1->0 forward "push" when placing a block
 
 func _setup_model() -> void:
@@ -424,15 +433,15 @@ func _make_snd(path: String, vol_db: float) -> AudioStreamPlayer:
 	add_child(p)
 	return p
 
-func _play_snd(p: AudioStreamPlayer) -> void:
+func _play_snd(p: AudioStreamPlayer, vol_off := 0.0, pitch_mul := 1.0) -> void:
 	if p == null or p.stream == null:
 		return
 	var v := _free_voice()
 	if v == null:
 		v = p                          # pool not ready yet — fall back to the holder itself
 	v.stream = p.stream
-	v.volume_db = p.volume_db
-	v.pitch_scale = randf_range(0.9, 1.1)
+	v.volume_db = p.volume_db + vol_off
+	v.pitch_scale = randf_range(0.9, 1.1) * pitch_mul   # natural jitter, then weighted by the caller
 	v.play()
 
 ## A pooled voice that isn't currently playing, else the next round-robin one (steals the
@@ -475,6 +484,23 @@ static func _shared_vfx_mat() -> StandardMaterial3D:
 		_vfx_mat.vertex_color_use_as_albedo = true
 	return _vfx_mat
 
+## Shrink bursts to ~20% over life so crumbs/sparks dissolve instead of popping out.
+static func _shared_vfx_scale_curve() -> Curve:
+	if _vfx_scale_curve == null:
+		_vfx_scale_curve = Curve.new()
+		_vfx_scale_curve.add_point(Vector2(0.0, 1.0))
+		_vfx_scale_curve.add_point(Vector2(1.0, 0.2))
+	return _vfx_scale_curve
+
+## White->transparent ramp: color_ramp MULTIPLIES the per-burst tint, so white RGB keeps each
+## burst's colour while fading alpha 1->0 over life (sparks/blood/dust fade out, not vanish).
+static func _shared_vfx_alpha_ramp() -> Gradient:
+	if _vfx_alpha_ramp == null:
+		_vfx_alpha_ramp = Gradient.new()
+		_vfx_alpha_ramp.set_color(0, Color(1, 1, 1, 1))
+		_vfx_alpha_ramp.set_color(1, Color(1, 1, 1, 0))
+	return _vfx_alpha_ramp
+
 func _setup_vfx() -> void:
 	if world_manager == null:
 		return
@@ -485,6 +511,8 @@ func _setup_vfx() -> void:
 		p.emitting = false
 		p.explosiveness = 0.9
 		p.direction = Vector3.UP
+		p.scale_amount_curve = _shared_vfx_scale_curve()   # taper size over life
+		p.color_ramp = _shared_vfx_alpha_ramp()            # fade alpha over life (keeps tint)
 		world_manager.add_child(p)
 		_vfx_pool.append(p)
 
@@ -841,10 +869,13 @@ func _animate_viewmodel(delta: float) -> void:
 	var swing_pos := Vector3.ZERO
 	var swing_rot := Vector3.ZERO
 	if _vm_swing > 0.0:
-		_vm_swing = maxf(0.0, _vm_swing - delta * 4.5)
+		# Heavier weapons decay slower (the chop lingers) and carve a deeper, more forward-lurching arc.
+		var decay := 4.5 * clampf(_vm_swing_spd / 1.5, 0.6, 1.4)
+		_vm_swing = maxf(0.0, _vm_swing - delta * decay)
 		var arc := sin((1.0 - _vm_swing) * PI)        # 0 -> 1 -> 0 across the swing
-		swing_rot = Vector3(-58.0 * arc, 0.0, 0.0)    # chop the weapon down and back up
-		swing_pos = Vector3(0.0, -0.07 * arc, 0.05 * arc)
+		var depth := lerpf(50.0, 74.0, _vm_heavy)     # deg of chop — heavy classes chop deeper
+		swing_rot = Vector3(-depth * arc, 0.0, 0.0)   # chop the weapon down and back up
+		swing_pos = Vector3(0.0, (-0.07 - 0.05 * _vm_heavy) * arc, (0.05 + 0.07 * _vm_heavy) * arc)
 	elif _vm_place > 0.0:
 		_vm_place = maxf(0.0, _vm_place - delta * 5.0)
 		var parc := sin((1.0 - _vm_place) * PI)       # quick jab forward + down, then back
@@ -923,6 +954,7 @@ func _physics_process(delta: float) -> void:
 	if _respawn_grace > 0.0:
 		_respawn_grace = maxf(0.0, _respawn_grace - delta)
 	var on_floor := is_on_floor()
+	_air_time = 0.0 if (on_floor or _in_water()) else _air_time + delta   # for the airborne-pose threshold
 	var in_water := _in_water()
 	_update_underwater_audio()
 	# Splash when plunging into water (a falling/jumping entry, not a slow wade-in).
@@ -942,7 +974,9 @@ func _physics_process(delta: float) -> void:
 					_play_snd(_step_sound_for(lbt))
 				add_trauma(clampf((_fall_speed - 4.0) * 0.03, 0.0, 0.3))
 				_land_squash = clampf((_fall_speed - 3.0) * 0.06, 0.0, 0.5)   # camera knees-bend dip
-			if _fall_speed > FALL_DAMAGE_SPEED and not in_water:
+			# No fall damage on the settling drop right after a respawn/load (the player didn't
+			# choose to fall — they were placed and let gravity close the last gap to the ground).
+			if _fall_speed > FALL_DAMAGE_SPEED and not in_water and _respawn_grace <= 0.0:
 				hurt(int((_fall_speed - FALL_DAMAGE_SPEED) / 4.0) + 1)
 	_was_on_floor = on_floor
 
@@ -1152,7 +1186,8 @@ func _update_footsteps(delta: float, in_water: bool) -> void:
 	if is_on_floor() and horiz > 1.0:
 		_step_timer -= delta
 		if _step_timer <= 0.0:
-			_step_timer = STEP_INTERVAL
+			# Cadence scales with actual speed — sprinting lands quicker footfalls than walking.
+			_step_timer = STEP_INTERVAL * clampf(WALK_SPEED / maxf(horiz, 0.1), 0.6, 1.15)
 			if world_manager:
 				var bt: int = world_manager.get_block(int(global_position.x), int(global_position.y) - 1, int(global_position.z))
 				_play_snd(_step_sound_for(bt))
@@ -1226,7 +1261,10 @@ func _update_camera_feel(delta: float, sprinting: bool, on_floor: bool) -> void:
 		return
 	var horiz := _horiz_speed
 	var target_fov := SPRINT_FOV if (sprinting and horiz > WALK_SPEED + 0.5) else BASE_FOV
-	camera.fov = lerpf(camera.fov, target_fov, delta * 8.0)
+	# Asymmetric FOV: snap WIDE fast on sprint-engage (a whoosh of speed), settle back at the
+	# original rate so sprint-release doesn't read floaty.
+	var fov_rate := 12.0 if target_fov > camera.fov else 8.0
+	camera.fov = lerpf(camera.fov, target_fov, delta * fov_rate)
 	# Decay the landing dip unconditionally so it can't get stuck when in third person.
 	if _land_squash > 0.0:
 		_land_squash = maxf(0.0, _land_squash - delta * 3.2)
@@ -1237,9 +1275,16 @@ func _update_camera_feel(delta: float, sprinting: bool, on_floor: bool) -> void:
 	var tgt_y := 0.0
 	var tgt_x := 0.0
 	if moving:
-		_bob_phase += delta * BOB_FREQ
+		# Phase rate tracks stride speed so sprinting bobs FASTER, not just harder.
+		_bob_phase += delta * BOB_FREQ * clampf(horiz / WALK_SPEED, 0.7, 1.6)
 		tgt_y = -absf(sin(_bob_phase)) * BOB_AMP * amt
 		tgt_x = cos(_bob_phase) * BOB_AMP * 0.5 * amt
+	else:
+		# Idle breathing — a slow few-mm sway so the view never feels frozen at rest (well below the
+		# aim point, so standing aim stays rock-steady).
+		_idle_breath += delta
+		tgt_y = sin(_idle_breath * 1.2) * 0.004
+		tgt_x = sin(_idle_breath * 0.8) * 0.003
 	# Landing dip: the view drops on impact then springs back, reading as the knees absorbing
 	# the fall (the squash magnitude was set on landing, scaled by fall speed).
 	tgt_y -= _land_squash * BOB_AMP * 6.0
@@ -1283,8 +1328,10 @@ func _update_animation() -> void:
 	var freeze := false
 	if _mine_timer > 0.0 and mine_anim != "":
 		want = mine_anim                    # mining / attacking — the whole body swings
-	elif not flying and not is_on_floor() and jump_anim != "":
-		want = jump_anim                    # airborne (jump / fall)
+	elif not flying and _air_time > 0.18 and _respawn_grace <= 0.0 and jump_anim != "":
+		# Genuinely airborne (a real jump/fall) — NOT a hair-thin settling gap right after a
+		# respawn, which previously left the player frozen in the spread "flying" jump pose.
+		want = jump_anim
 	elif not flying and is_on_floor() and horiz > 0.6:
 		want = run_anim if (sprinting and run_anim != "") else walk_anim   # sprint = run, else walk
 	elif idle_anim != "":
@@ -1330,7 +1377,8 @@ func _attack_mob(mob) -> void:
 	_swing_cd = 1.0 / maxf(spd, 0.1)
 	if mine_anim != "":
 		_mine_timer = minf(0.45, _swing_cd)
-	_play_snd(snd_swing)
+	var heavy: bool = dmg >= 5 or (("health" in mob) and int(mob.health) <= dmg)
+	_play_snd(snd_swing, 0.0, clampf(0.62 + spd * 0.26, 0.65, 1.35))   # whoosh pitched by weapon weight: heavy=low/slow, dagger=high/fast
 	_weapon_swing(_swing_cd)
 	add_trauma(0.22)                       # combat impact shake
 	get_tree().call_group("ducker", "duck", 0.4, 0.4)
@@ -1339,7 +1387,7 @@ func _attack_mob(mob) -> void:
 	if mob.has_method("take_damage"):
 		mob.take_damage(dmg)
 		_play_snd(snd_monster)
-		if hud and hud.has_method("hit_marker"): hud.hit_marker()
+		if hud and hud.has_method("hit_marker"): hud.hit_marker(heavy)
 	if mob is Node3D:
 		var mobpos: Vector3 = (mob as Node3D).global_position
 		# Directional blood spray ALONG the blow (away from the player), heavier on a heavy/lethal hit.
@@ -1347,11 +1395,12 @@ func _attack_mob(mob) -> void:
 		away.y = 0.3
 		away = away.normalized()
 		var hit_pos := mobpos + Vector3(0, 1.0, 0) - away * 0.4
-		var heavy: bool = dmg >= 5 or (("health" in mob) and int(mob.health) <= dmg)
 		_emit_burst(hit_pos, Color(0.85, 0.12, 0.10), 16 if heavy else 10, 0.28, 30.0, 2.0, 6.0 if heavy else 4.5, 5.0, away)   # fine mist
+		_emit_burst(hit_pos, Color(1.8, 1.6, 0.9), 10 if heavy else 6, 0.16, 55.0, 4.0, 8.0, 1.0, away)                          # hot impact spark (HDR — catches the bloom)
 		_emit_burst(hit_pos, Color(0.6, 0.05, 0.05), 5 if heavy else 3, 0.42, 22.0, 1.5, 3.0, 11.0, away)                       # arcing gobs
 		if heavy:
 			add_trauma(0.35)                   # the killing/heavy blow lands with extra weight
+			_apply_hitstop(clampf(0.045 + float(dmg) * 0.004, 0.05, 0.12))   # micro freeze-frame on the connect — heavier weapons hold longer
 		if mob.has_method("apply_knockback"):
 			var force := clampf(float(dmg) * 0.7, 2.0, 9.0)
 			mob.apply_knockback(mobpos - global_position, force)
@@ -1455,10 +1504,21 @@ func _weapon_swing(dur: float) -> void:
 	if weapon_holder == null:
 		return
 	var cat := "sword"
+	var spd := 1.5
 	var w: Dictionary = weapon_holder.current()
 	if not w.is_empty():
 		cat = String(w.category)
-	weapon_holder.swing(cat, dur); _vm_swing = 1.0   # also drive the first-person viewmodel chop
+		spd = float(w.attack_speed)
+	weapon_holder.swing(cat, dur)
+	_vm_swing = 1.0                  # also drive the first-person viewmodel chop
+	_vm_swing_spd = spd
+	# Heaviest classes swing with visible weight: deeper/slower FP arc (in _animate_viewmodel) plus a
+	# knees-buckle camera dip + extra shake here, so the Heavy Maul finally lands HEAVY.
+	var heavy_cat := cat == "maul" or cat == "axe" or cat == "hammer" or cat == "mace"
+	_vm_heavy = 1.0 if heavy_cat else 0.0
+	if heavy_cat:
+		_land_squash = maxf(_land_squash, clampf(0.35 + (1.2 - spd) * 0.25, 0.25, 0.6))   # reuse the landing-dip channel
+		add_trauma(clampf(0.18 + (1.2 - spd) * 0.12, 0.18, 0.4))
 
 func _reset_mining() -> void:
 	if _mine_progress != 0.0:
@@ -1597,6 +1657,19 @@ func give_or_drop(id: int, n: int) -> void:
 ## view WITHOUT moving the aim raycast (which is a child of the camera node).
 func add_trauma(amount: float) -> void:
 	_cam_trauma = clampf(_cam_trauma + amount, 0.0, 1.0)
+
+## Brief whole-game freeze-frame on a heavy/lethal melee impact, so the flash + spray + shake
+## fuse into one concussive beat. Cheap (one wall-clock timer per heavy hit). The 4th create_timer
+## arg (ignore_time_scale=true) is REQUIRED — a scaled timer at time_scale 0.02 would take seconds.
+func _apply_hitstop(duration: float) -> void:
+	if _hitstop_active:
+		return                                 # don't let an overlapping heavy hit reset the clock
+	_hitstop_active = true
+	Engine.time_scale = 0.02
+	var t := get_tree().create_timer(duration, true, false, true)
+	t.timeout.connect(func() -> void:
+		Engine.time_scale = 1.0
+		_hitstop_active = false)
 
 func _update_shake(delta: float) -> void:
 	if camera == null:
@@ -1766,15 +1839,22 @@ func _ground_at(x: float, z: float) -> Vector3:
 	var fz := floori(z)
 	var gy := 80.0                  # safe fallback if the world manager is somehow unavailable
 	if world_manager:
-		# Force-build the chunks around the ACTUAL feet column (floori — matches is_chunk_ready /
-		# _ground_streaming, unlike the old int() which disagreed at negative coords).
-		if world_manager.has_method("preload_around"):
-			var cc := Vector2i(world_manager.chunk_x(fx), world_manager.chunk_z(fz))
-			world_manager.preload_around(cc)
-		if world_manager.has_method("solid_top_y"):
+		# Pick a clean, grounded column: find_spawn_ground nudges off any tree column (whose only
+		# voxel is a 1-wide stump pole — standing on it read as "respawned in the sky") and off
+		# water, onto the nearest open dry land, returning feet-height there. Then force-build the
+		# chunks around THAT chosen column so a collider exists this frame (no fall-through / hover).
+		if world_manager.has_method("find_spawn_ground"):
+			var safe: Vector3 = world_manager.find_spawn_ground(x, z)
+			fx = floori(safe.x)
+			fz = floori(safe.z)
+			gy = safe.y
+		elif world_manager.has_method("solid_top_y"):
 			gy = float(world_manager.solid_top_y(fx, fz)) + 1.05
 		elif world_manager.has_method("surface_height"):
 			gy = float(world_manager.surface_height(fx, fz)) + 1.05
+		if world_manager.has_method("preload_around"):
+			var cc := Vector2i(world_manager.chunk_x(fx), world_manager.chunk_z(fz))
+			world_manager.preload_around(cc)
 	var pos := Vector3(float(fx) + 0.5, gy, float(fz) + 0.5)
 	# Establish floor contact this frame: move to the target, then snap down onto the collider so
 	# is_on_floor() reads true next frame (no airborne pin). apply_floor_snap needs the body placed
