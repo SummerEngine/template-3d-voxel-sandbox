@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode cull_back, diffuse_lambert;
+render_mode cull_disabled, diffuse_lambert;
 
 // 8x8 block atlas (assets/textures/blocks/atlas.png). The mesh stores each face's
 // tile ORIGIN (col*0.125, row*0.125) in COLOR.rg, and UVs tile 0..N across the face;
