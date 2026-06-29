@@ -95,6 +95,9 @@ func _check_discoveries() -> void:
 				1: msg = "A buried crypt — something guards what's inside."
 				2: msg = "A standing obelisk marks this place."
 			player.hud.show_toast(msg, Color(0.95, 0.9, 0.7))
+			# Gold sparkle on the landmark itself (HDR gold catches the bloom) — the world reacts, not just the HUD.
+			if player.has_method("_emit_burst"):
+				player._emit_burst(d.pos + Vector3(0, 0.6, 0), Color(1.6, 1.35, 0.55), 18, 0.7, 60.0, 1.5, 3.5, 5.0)
 
 ## Bias which structure a cell gets by biome so regions feel like they "have their own" landmark,
 ## while staying a pure function of the cell hash (deterministic, no RNG, no save field).

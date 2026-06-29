@@ -43,6 +43,8 @@ var _toast_tw: Tween
 var _hitmark: Label              # brief red "x" when an attack lands on a mob
 var _prev_sel := -1              # last hotbar selection, to pulse + tick on change
 var _snd_tick: AudioStreamPlayer # dedicated soft tick for hotbar scrolling
+var _hb: AudioStreamPlayer       # low-health heartbeat, synced to the vignette breathe
+var _hb_next := 0.0              # next _low_phase at which to thump (one beat per breathe cycle)
 var _blood_vig: TextureRect      # pulsing red edge-vignette during a blood moon
 var _blood_on := false
 var _blood_phase := 0.0
@@ -67,6 +69,13 @@ func _ready() -> void:
 	if AudioServer.get_bus_index("SFX") != -1:
 		_snd_tick.bus = "SFX"
 	add_child(_snd_tick)
+	_hb = AudioStreamPlayer.new()
+	if ResourceLoader.exists("res://assets/audio/sfx/player/heartbeat.wav"):
+		_hb.stream = load("res://assets/audio/sfx/player/heartbeat.wav")
+	_hb.volume_db = -10.0
+	if AudioServer.get_bus_index("SFX") != -1:
+		_hb.bus = "SFX"
+	add_child(_hb)
 	get_viewport().size_changed.connect(_layout)
 	_layout()
 
@@ -557,11 +566,12 @@ func set_time_state(is_night: bool, n: int, blood: bool) -> void:
 		_time_label.text = "Day %d" % maxi(1, n)
 		_time_label.modulate = Color(0.95, 0.95, 0.82)
 
-## Brief red screen flash when the player takes damage.
-func flash_damage() -> void:
+## Brief red screen flash when the player takes damage. `intensity` (0..1) scales the wash so a
+## big hit reads harder; defaults to 0.45 so existing no-arg callers (e.g. the void plunge) are unchanged.
+func flash_damage(intensity := 0.45) -> void:
 	if _dmg_flash == null:
 		return
-	_dmg_flash.modulate.a = 0.45
+	_dmg_flash.modulate.a = clampf(intensity, 0.0, 1.0)
 	var tw := create_tween()
 	tw.tween_property(_dmg_flash, "modulate:a", 0.0, 0.4)
 
@@ -574,6 +584,14 @@ func _update_vignette(delta: float) -> void:
 	if _low_active:
 		_low_phase += delta * 3.2
 		target = _low_intensity * (0.45 + 0.55 * absf(sin(_low_phase)))   # breathe between dim and full
+		# Heartbeat thump once per breathe cycle (~1s), deepening as health falls — an AUDIBLE danger
+		# cue for players watching the world, not the hearts. Latched on _low_phase so it can't spam.
+		if _hb and _hb.stream and _low_phase >= _hb_next:
+			_hb_next = _low_phase + PI
+			_hb.volume_db = lerpf(-13.0, -4.0, clampf(_low_intensity / 0.6, 0.0, 1.0))
+			_hb.play()
+	else:
+		_hb_next = 0.0                                   # re-arm: next low-health episode thumps right away
 	_vignette.modulate.a = move_toward(_vignette.modulate.a, target, delta * 2.2)
 	# Blood-moon edge pulse (composes over the low-health one).
 	if _blood_vig:
@@ -588,7 +606,7 @@ func set_health(h: int, max_h: int) -> void:
 	var s := ""
 	for i in range(max_h):
 		s += "♥" if i < h else "♡"
-	_hearts.text = s
+	_hearts.text = s + "  %d/%d" % [h, max_h]   # exact count for quick/low-vision reads (glyphs kept)
 	# Critical-health warning: vignette kicks in at the bottom third of health and deepens as it
 	# drops. Off entirely at 0 (the death screen takes over from there).
 	var frac := float(h) / float(maxi(1, max_h))
@@ -600,7 +618,7 @@ func set_hunger(h: int, max_h: int) -> void:
 	var s := ""
 	for i in range(max_h):
 		s += "◆" if i < h else "◇"
-	_hunger.text = s
+	_hunger.text = s + "  %d/%d" % [h, max_h]
 
 func set_mine_progress(p: float) -> void:
 	var active := p > 0.0 and p < 1.0
@@ -647,6 +665,12 @@ func update_hotbar(slots: Array, selected: int) -> void:
 		if _snd_tick and _snd_tick.stream:
 			_snd_tick.play()
 	_prev_sel = selected
+
+## Soft UI tick for actions that change the held item without touching the hotbar `selected` index
+## (e.g. Q/E weapon switch), so they match the hotbar's own select click. Reuses the _snd_tick voice.
+func tick_select() -> void:
+	if _snd_tick and _snd_tick.stream:
+		_snd_tick.play()
 
 ## A brief warm brighten of a hotbar slot when its stack grows — the "+1" pickup pop. Modulate
 ## only (not scale) so it never shifts the HBox layout.

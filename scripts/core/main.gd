@@ -483,6 +483,9 @@ func _spawn_one_hostile(spec: Dictionary) -> void:
 	mob.position = Vector3(mx, float(my), mz)
 	add_child(mob)
 	_hostiles.append(mob)
+	# A low, dark dust poof softens the "pop into existence" when a siege mob materializes in view.
+	if player and player.has_method("_emit_burst"):
+		player._emit_burst(mob.global_position + Vector3(0, 0.1, 0), Color(0.35, 0.32, 0.30), 6, 0.45, 80.0, 0.6, 1.8, 7.0)
 
 ## A blood-moon claw-up: a hostile erupts from a marked grave cell with a dirt burst.
 func _spawn_clawup(pos: Vector3) -> void:

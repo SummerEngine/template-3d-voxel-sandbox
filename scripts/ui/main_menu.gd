@@ -20,6 +20,7 @@ const OPTIONS := [
 
 var _toast: Label
 var _settings: Control
+var _snd_click: AudioStreamPlayer
 var _col: VBoxContainer
 var _fill: ColorRect
 var _bg: TextureRect
@@ -125,6 +126,7 @@ func _build() -> void:
 	panel.add_child(vb)
 	for opt in OPTIONS:
 		var btn := UITheme.make_button(opt.text, opt.kind, Vector2(340, 0))
+		btn.pressed.connect(_play_click)
 		btn.pressed.connect(_on_option.bind(opt.id))
 		vb.add_child(btn)
 
@@ -132,7 +134,24 @@ func _build() -> void:
 	_build_gear()
 	_build_version()
 	_build_music()
+	_build_click_sfx()
 	_build_settings()
+
+## A UI click on every menu button, matching the in-game pause/chest/crafting menus
+## (the title screen was the one silent screen). Loads the same ui/click.mp3 on the SFX bus.
+func _build_click_sfx() -> void:
+	_snd_click = AudioStreamPlayer.new()
+	_snd_click.process_mode = Node.PROCESS_MODE_ALWAYS
+	if ResourceLoader.exists("res://assets/audio/sfx/ui/click.mp3"):
+		_snd_click.stream = load("res://assets/audio/sfx/ui/click.mp3")
+	_snd_click.volume_db = -10.0
+	if AudioServer.get_bus_index("SFX") != -1:
+		_snd_click.bus = "SFX"
+	add_child(_snd_click)
+
+func _play_click() -> void:
+	if _snd_click and _snd_click.stream:
+		_snd_click.play()
 
 	_toast = Label.new()
 	_toast.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -172,6 +191,7 @@ func _build_gear() -> void:
 	var gear := UITheme.make_button("⚙", "normal", Vector2(48, 48))
 	gear.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	gear.position = Vector2(-64, 16)
+	gear.pressed.connect(_play_click)
 	gear.pressed.connect(_on_option.bind("settings"))
 	add_child(gear)
 
@@ -231,6 +251,7 @@ func _build_settings() -> void:
 	more.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vb.add_child(more)
 	var back := UITheme.make_button("BACK", "primary", Vector2(320, 0))
+	back.pressed.connect(_play_click)
 	back.pressed.connect(_close_settings)
 	vb.add_child(back)
 
@@ -273,9 +294,10 @@ func _on_option(id: String) -> void:
 			get_tree().paused = false
 			get_tree().change_scene_to_file("res://scenes/loading.tscn")
 		"create":
-			GameState.load_on_start = false                  # CREATE NEW WORLD: always a fresh start
-			get_tree().paused = false
-			get_tree().change_scene_to_file("res://scenes/loading.tscn")
+			if WorldSave.has_save():
+				_confirm_new_world()                         # don't silently overwrite an existing world
+			else:
+				_start_new_world()
 		"load":
 			if WorldSave.has_save():
 				GameState.load_on_start = true
@@ -288,6 +310,51 @@ func _on_option(id: String) -> void:
 				_settings.visible = true
 		"exit":
 			get_tree().quit()
+
+func _start_new_world() -> void:
+	GameState.load_on_start = false                  # CREATE NEW WORLD: always a fresh start
+	get_tree().paused = false
+	get_tree().change_scene_to_file("res://scenes/loading.tscn")
+
+## Modal warning before CREATE NEW WORLD replaces the single saved world (one fixed save slot).
+func _confirm_new_world() -> void:
+	var overlay := Control.new()
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(overlay)
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.6)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(center)
+	var frame := PanelContainer.new()
+	frame.add_theme_stylebox_override("panel", UITheme.dialog_box())
+	center.add_child(frame)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 14)
+	frame.add_child(vb)
+	var msg := Label.new()
+	msg.text = "Start a new world?\nYour current saved world will be replaced."
+	msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	msg.add_theme_font_size_override("font_size", 20)
+	vb.add_child(msg)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	vb.add_child(row)
+	var cancel := UITheme.make_button("Cancel", "normal", Vector2(150, 0))
+	cancel.pressed.connect(_play_click)
+	cancel.pressed.connect(overlay.queue_free)
+	row.add_child(cancel)
+	var go := UITheme.make_button("Start New", "danger", Vector2(150, 0))
+	go.pressed.connect(_play_click)
+	go.pressed.connect(func() -> void:
+		overlay.queue_free()
+		_start_new_world())
+	row.add_child(go)
 
 var _toast_token := 0   # bumped per toast so an earlier timer can't hide a newer toast
 

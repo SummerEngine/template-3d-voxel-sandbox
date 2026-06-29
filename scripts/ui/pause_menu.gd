@@ -17,6 +17,7 @@ var _settings_panel: Control
 var _settings_scroll: ScrollContainer   # holds the sliders+rebinds; height-capped so BACK stays reachable
 var _capturing_action := ""        # while non-empty, the next key press rebinds this action
 var _rebind_btns := {}             # action -> Button (its label shows the current key)
+var _resume_btn: Button            # focused on open so the pause menu is keyboard/controller navigable
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -67,27 +68,36 @@ func _build() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(title)
 
+	# make_button clears focus; re-enable it here (scoped to the pause buttons only) so Tab/arrows
+	# navigate and Enter activates — keyboard/controller players can operate the menu. The focus
+	# stylebox is empty, so this adds NO visual change.
 	var resume := UITheme.make_button("RESUME", "primary", Vector2(300, 0))
+	resume.focus_mode = Control.FOCUS_ALL
 	resume.pressed.connect(_play_click)
 	resume.pressed.connect(_resume)
 	vb.add_child(resume)
+	_resume_btn = resume
 
 	var save := UITheme.make_button("SAVE WORLD", "gold", Vector2(300, 0))
+	save.focus_mode = Control.FOCUS_ALL
 	save.pressed.connect(_play_click)
 	save.pressed.connect(_save)
 	vb.add_child(save)
 
 	var settings := UITheme.make_button("SETTINGS", "normal", Vector2(300, 0))
+	settings.focus_mode = Control.FOCUS_ALL
 	settings.pressed.connect(_play_click)
 	settings.pressed.connect(_open_settings)
 	vb.add_child(settings)
 
 	var menu := UITheme.make_button("MAIN MENU", "normal", Vector2(300, 0))
+	menu.focus_mode = Control.FOCUS_ALL
 	menu.pressed.connect(_play_click)
 	menu.pressed.connect(_to_menu)
 	vb.add_child(menu)
 
 	var quit := UITheme.make_button("QUIT", "danger", Vector2(300, 0))
+	quit.focus_mode = Control.FOCUS_ALL
 	quit.pressed.connect(_play_click)
 	quit.pressed.connect(_quit)
 	vb.add_child(quit)
@@ -162,7 +172,7 @@ func _build_settings() -> void:
 	list.add_child(unease_cb)
 
 	var ctl := Label.new()
-	ctl.text = "Controls  (click a key, then press the new one)"
+	ctl.text = "Controls  (click a key, then press the new one — Esc cancels)"
 	ctl.add_theme_font_size_override("font_size", 20)
 	ctl.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0))
 	list.add_child(ctl)
@@ -195,7 +205,7 @@ func _build_settings() -> void:
 func _begin_capture(action: String, btn: Button) -> void:
 	_play_click()
 	_capturing_action = action
-	btn.text = "Press a key…"
+	btn.text = "Press a key…  (Esc cancels)"
 
 func _reset_controls() -> void:
 	InputActions.reset()
@@ -308,5 +318,7 @@ func _quit() -> void:
 func _show(v: bool) -> void:
 	if panel:
 		panel.visible = v
+	if v and _resume_btn:
+		_resume_btn.grab_focus()                 # land focus on RESUME so keys work without a mouse
 	if not v and _settings_panel:
 		_settings_panel.visible = false          # closing the pause menu also closes settings

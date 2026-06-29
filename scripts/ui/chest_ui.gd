@@ -14,6 +14,7 @@ var _panel: Control
 var _chest_slots: Array = []     # {swatch, count}
 var _inv_slots: Array = []
 var _snd: AudioStreamPlayer
+var _toast: Label                # status line for blocked/partial stack moves
 var open := false
 
 func _ready() -> void:
@@ -72,6 +73,10 @@ func _build() -> void:
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.modulate = Color(1, 1, 1, 0.55)
 	vb.add_child(hint)
+	_toast = Label.new()
+	_toast.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_toast.modulate = Color(1.0, 1.0, 0.8)
+	vb.add_child(_toast)
 
 func _grid(store: Array, which: String) -> Control:
 	var gc := HBoxContainer.new()
@@ -108,7 +113,7 @@ func _grid(store: Array, which: String) -> Control:
 		var idx := i
 		btn.pressed.connect(func() -> void: _on_slot(which, idx))
 		g.add_child(btn)
-		store.append({"swatch": sw, "icon": ic, "count": ct})
+		store.append({"btn": btn, "swatch": sw, "icon": ic, "count": ct})
 	return gc
 
 func open_chest(cell: Vector3i) -> void:
@@ -118,6 +123,7 @@ func open_chest(cell: Vector3i) -> void:
 	_chest = world.chest_at(cell)
 	open = true
 	_panel.visible = true
+	if _toast: _toast.text = ""
 	_play()
 	_refresh()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -144,6 +150,8 @@ func _on_slot(which: String, i: int) -> void:
 	s.count -= moved
 	if s.count <= 0:
 		s.id = VoxelTypes.AIR
+	if _toast:                       # explain a blocked/partial move (the click otherwise looks dead)
+		_toast.text = "That side is full" if moved == 0 else ("Moved %d (rest didn't fit)" % moved if left > 0 else "")
 	_play()
 	if player.has_method("on_inventory_changed"):
 		player.on_inventory_changed()
@@ -160,10 +168,12 @@ func _fill(ui_slots: Array, data: Array) -> void:
 			ui_slots[i].icon.texture = tex
 			ui_slots[i].swatch.color = Color(0, 0, 0, 0) if tex != null else VoxelTypes.color_of(data[i].id)
 			ui_slots[i].count.text = str(data[i].count) if data[i].count > 1 else ""
+			ui_slots[i].btn.tooltip_text = "%s  ×%d" % [VoxelTypes.name_of(data[i].id), data[i].count]
 		else:
 			ui_slots[i].icon.texture = null
 			ui_slots[i].swatch.color = Color(0, 0, 0, 0)
 			ui_slots[i].count.text = ""
+			ui_slots[i].btn.tooltip_text = "Empty"
 
 func _play() -> void:
 	if _snd and _snd.stream:

@@ -704,11 +704,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9:
 				_select(event.keycode - KEY_1)
 			KEY_Q:
-				if weapon_holder: weapon_holder.prev()
+				if weapon_holder:
+					var b := String(weapon_holder.current().get("name", ""))
+					weapon_holder.prev()
+					if hud and hud.has_method("tick_select") and String(weapon_holder.current().get("name", "")) != b:
+						hud.tick_select()    # click only when the weapon actually changed (silent on a 1-weapon no-op)
 				_build_viewmodel()
 				_update_hud()
 			KEY_E:
-				if weapon_holder: weapon_holder.next()
+				if weapon_holder:
+					var b := String(weapon_holder.current().get("name", ""))
+					weapon_holder.next()
+					if hud and hud.has_method("tick_select") and String(weapon_holder.current().get("name", "")) != b:
+						hud.tick_select()
 				_build_viewmodel()
 				_update_hud()
 			KEY_G:
@@ -963,6 +971,8 @@ func _physics_process(delta: float) -> void:
 	if in_water and not _was_in_water and velocity.y < -2.0:
 		_emit_burst(global_position + Vector3(0, 0.3, 0), Color(0.72, 0.85, 1.0), 14, 0.5, 82.0, 1.5, 3.8, 6.0)
 		_play_snd(snd_swim)                      # audible splash to match the visual entry burst
+	elif _was_in_water and not in_water and on_floor:
+		_play_snd(snd_swim, -8.0)                # lighter emergence splash climbing out (gated on landing, no shoreline chatter)
 	_was_in_water = in_water
 	if on_floor and not _was_on_floor:
 		if not _landed_once:
@@ -1119,6 +1129,8 @@ func _physics_process(delta: float) -> void:
 			var ly := floori(global_position.y)
 			if world_manager.get_block(lx, ly, lz) == VoxelTypes.LAVA or world_manager.get_block(lx, ly - 1, lz) == VoxelTypes.LAVA:
 				hurt(2)
+				# Fire embers at the feet so the burn reads as lava, not damage from nowhere (rate-limited by this 0.5s throttle).
+				_emit_burst(global_position + Vector3(0, 0.2, 0), Color(1.7, 0.55, 0.12), 8, 0.5, 50.0, 0.8, 2.0, -3.0)
 
 	if global_position.y < VOID_Y:
 		# A void plunge restores you (no death screen) — but give it a real beat, not a silent teleport.
@@ -1704,10 +1716,15 @@ func hurt(amount: int) -> void:
 	_hurt_cd = 0.5
 	_regen_block = REGEN_BLOCK_TIME
 	_play_snd(snd_hurt)
-	add_trauma(0.5)                        # heavy shake when the player is hit
+	# Scale the danger feedback by how much of your health the hit took — a scratch barely
+	# registers, a brute/maul blow slams the camera and washes the screen red.
+	var sev := clampf(float(amount) / float(maxi(1, max_health)), 0.0, 1.0)
+	add_trauma(0.30 + 0.45 * sev)          # camera kick scales with the hit
 	get_tree().call_group("ducker", "duck", 0.6, 0.5)
 	if hud and hud.has_method("flash_damage"):
-		hud.flash_damage()                 # red screen flash
+		hud.flash_damage(0.28 + 0.4 * sev) # red screen flash, deeper on a big hit
+	# A short dark-red impact mist on the body (3rd-person tell, symmetric with the mob-hit spray).
+	_emit_burst(global_position + Vector3(0, 1.0, 0), Color(0.8, 0.12, 0.12), 8, 0.25, 40.0, 1.5, 3.5, 6.0)
 	health -= amount
 	if health <= 0:
 		health = 0

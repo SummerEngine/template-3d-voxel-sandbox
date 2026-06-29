@@ -466,6 +466,7 @@ func _apply_context() -> void:
 func close() -> void:
 	if not open:
 		return
+	_play(_snd_click)              # dismiss feedback, symmetric with the open sound (chest UI does this)
 	open = false
 	_panel.visible = false
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED

@@ -19,6 +19,9 @@ const TIPS := [
 	"Q / E switch your weapon; 1-9 (or scroll) pick a hotbar slot.",
 	"Press C to craft, M for the map, J for your goals, F3 for stats.",
 	"Higher-tier tools break tougher blocks and free rarer ores.",
+	"Place a Crafting Table to unlock tools & armor; a Furnace to smelt ore.",
+	"Right-click a placed Chest to stash loot you don't want to carry.",
+	"Every fifth night is a Blood Moon — build defenses before it falls.",
 ]
 
 var _paths: PackedStringArray = PackedStringArray()

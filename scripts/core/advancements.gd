@@ -87,6 +87,9 @@ func _grant(a: Dictionary) -> void:
 		_snd_adv.play()
 	if player.hud and player.hud.has_method("show_toast"):
 		player.hud.show_toast("Advancement: %s!" % a.title, Color(1.0, 0.88, 0.4))
+	# Rising gold motes around the player so a milestone feels as juicy as a pickup.
+	if player and player.has_method("_emit_burst"):
+		player._emit_burst(player.global_position + Vector3(0, 1.2, 0), Color(1.5, 1.3, 0.5), 16, 0.8, 45.0, 1.0, 2.6, 2.0)
 	if a.has("reward") and player.has_method("unlock_tool"):
 		player.unlock_tool(String(a.reward), false)   # add it, don't yank the held weapon
 		if player.hud and player.hud.has_method("show_toast"):
