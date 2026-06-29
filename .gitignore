@@ -7,3 +7,6 @@
 
 # Editor-generated backups
 *.bak
+
+# Local MCP server config (machine-specific paths; not for the shared template)
+.mcp.json
