@@ -313,7 +313,7 @@ func _build_recipe_row(idx: int) -> Control:
 
 ## True if the inventory holds every input of a recipe.
 func _can_afford(r: Dictionary) -> bool:
-	if player == null:
+	if player == null or player.inventory == null:
 		return false
 	for ing in r.in:
 		if player.inventory.total(int(ing[0])) < int(ing[1]):
@@ -328,7 +328,7 @@ func _inputs_label(r: Dictionary) -> String:
 
 ## Refresh the materials grid and grey out recipes you can't currently afford.
 func _refresh() -> void:
-	if player == null:
+	if player == null or player.inventory == null:
 		return
 	# Auto-dismiss a stale "Need X" message once the player has gathered the missing items
 	# (the row turns green) — _refresh fires on every inventory change.
@@ -359,7 +359,7 @@ func _refresh() -> void:
 		if kind == "tool":
 			owned = player.has_method("owns_tool") and player.owns_tool(String(r.get("tool", "")))
 		elif kind == "armor":
-			owned = int(player.armor_tier) >= int(r.get("armor", 0))
+			owned = (int(player.armor_tier) if "armor_tier" in player else 0) >= int(r.get("armor", 0))
 		var afford: bool = _can_afford(r)
 		# Dim the WHOLE row when you can't afford it, so you can scan for "what can I make now"
 		# at a glance. Owned recipes stay bright with a muted "Owned" button.
@@ -395,12 +395,12 @@ func _craft(idx: int) -> void:
 				player.set_armor_tier(int(r.get("armor", 0)), _out_name(r))
 			_toast.text = "Equipped %s" % _out_name(r)
 		_:
-			player.give_or_drop(int(r.out_id), int(r.get("out_n", 1)))
+			player.give_or_drop(int(r.get("out_id", 0)), int(r.get("out_n", 1)))
 			_toast.text = "Crafted %d %s" % [int(r.get("out_n", 1)), _out_name(r)]
 			if player.has_signal("item_crafted"):
-				player.emit_signal("item_crafted", int(r.out_id))
+				player.emit_signal("item_crafted", int(r.get("out_id", 0)))
 			# Teach the new right-click verbs once (center toast — the panel's own _toast is local).
-			var oid := int(r.out_id)
+			var oid := int(r.get("out_id", 0))
 			if oid == VoxelTypes.RESONATOR and not _taught_resonator:
 				_taught_resonator = true
 				if player.hud and player.hud.has_method("show_toast"):

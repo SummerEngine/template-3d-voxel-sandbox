@@ -117,4 +117,7 @@ func _spawn_y(x: int, z: int, mode: int) -> float:
 				return sh + 0.5                          # too-shallow: just above the bed, never inside it
 			return clampf((sh + float(world.SEA_LEVEL)) * 0.5, lo, hi)  # mid-column
 		_:
-			return sh + 2.0                                              # ground
+			# Ground fauna: stand on the REAL solid top (cave/edit/tree-stump aware), not the 2D-noise
+			# surface — otherwise a land animal spawns embedded in terrain (and falls) or trapped on a
+			# 1-wide tree stump. solid_top_y returns the top solid cell; +1 puts feet in the air above it.
+			return float(world.solid_top_y(x, z) + 1)                    # ground

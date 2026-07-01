@@ -46,8 +46,8 @@ const STEP_INTERVAL := 0.38
 
 const CAM_HEIGHT := 1.5
 const CAM_DISTANCE := 4.5
-const PITCH_MIN := -1.2
-const PITCH_MAX := 0.6
+const PITCH_MIN := -1.56   # ~-89.4° — look essentially straight down (small margin off ±90° avoids gimbal flip)
+const PITCH_MAX := 1.56    # ~+89.4° — look essentially straight up
 const TURN_SPEED := 12.0
 
 # Movement feel: a touch of FOV widening when sprinting + a subtle walk bob.
@@ -844,7 +844,7 @@ func _build_viewmodel() -> void:
 func _build_fp_arm(root: Node3D) -> void:
 	const FP_ARM_PATH := "res://assets/models/characters/fp_hand.glb"
 	const FP_ARM_POS := Vector3(0.07, -0.05, 0.07)
-	const FP_ARM_ROT := Vector3(6.0, 34.0, 10.0)   # was 214° (fist faced the camera); flipped ~180° to point away
+	const FP_ARM_ROT := Vector3(6.0, 124.0, 10.0)   # 214° faced camera; -180° (to 34) over-flipped it forward/back; -90° (to 124) points fingers forward
 	const FP_ARM_SIZE := 0.30
 	if not ResourceLoader.exists(FP_ARM_PATH):
 		return
@@ -1937,22 +1937,30 @@ func apply_save(p: Dictionary) -> void:
 		var sx := float(p.x)
 		var sy := float(p.y)
 		var sz := float(p.z)
-		# Guard against corrupt coords, and against being buried OR floating after a terrain change
-		# or a mid-air/flying save: reject non-finite values, then UNCONDITIONALLY snap the player
-		# onto the real surface of the saved column. The old code only LIFTED a buried player (it
-		# never lowered a high saved y), so a save taken while flying/falling reloaded the player in
-		# the sky — the resume-path half of the recurring "respawn in the sky" bug. _ground_at
-		# force-builds the column, finds the true collider top (caves/edits/structures aware) and
-		# settles onto it, matching the death-respawn path exactly.
-		if not (is_finite(sx) and is_finite(sy) and is_finite(sz)):
-			sx = 0.5
-			sy = 80.0
-			sz = 0.5
+		# Restore the EXACT saved position: it was valid when they saved, so a player who mined
+		# down into a hole reloads back in the hole (not re-grounded above it, then falling in).
+		# Only fall back to _ground_at (re-ground onto the real column surface) when the saved
+		# position can't be trusted: non-finite coords, OR the player's feet/head cell is now
+		# solid — i.e. terrain changed under a save and they'd load buried inside blocks.
+		var valid := is_finite(sx) and is_finite(sy) and is_finite(sz)
 		if world_manager:
-			global_position = _ground_at(sx, sz)
+			var buried := false
+			if valid:
+				var fy := floori(sy)
+				var hy := floori(sy + 1.7)   # head cell, inside the 1.8-tall cylinder
+				var fx := floori(sx)
+				var fz := floori(sz)
+				var fb: int = world_manager.get_block(fx, fy, fz)
+				var hb: int = world_manager.get_block(fx, hy, fz)
+				buried = (VoxelTypes.is_solid(fb) and fb != VoxelTypes.WATER) \
+					or (VoxelTypes.is_solid(hb) and hb != VoxelTypes.WATER)
+			if valid and not buried:
+				global_position = Vector3(sx, sy, sz)
+			else:
+				global_position = _ground_at(sx if valid else 0.5, sz if valid else 0.5)
 			_respawn_grace = 0.4   # same anti-pin grace as a death respawn (covers a still-streaming load)
 		else:
-			global_position = Vector3(sx, sy, sz)
+			global_position = Vector3(sx, sy, sz) if valid else Vector3(0.5, 80.0, 0.5)
 		spawn_point = global_position
 	health = clampi(int(p.get("health", health)), 0, max_health)   # never load out-of-range / negative HP
 	hunger = clampf(float(p.get("hunger", hunger)), 0.0, float(MAX_HUNGER))

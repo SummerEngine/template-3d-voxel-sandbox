@@ -470,7 +470,9 @@ func _spawn_one_hostile(spec: Dictionary) -> void:
 		rad = float(b.get("rad", rad))
 	var mx: float = player.global_position.x + cos(ang) * rad
 	var mz: float = player.global_position.z + sin(ang) * rad
-	var my: int = world.surface_height(int(mx), int(mz)) + 2
+	# Spawn on the REAL solid top (cave/edit/tree-stump aware), not the 2D-noise surface — otherwise
+	# a mob embeds in terrain (and falls) or lands perched on a 1-wide tree stump and gets stuck.
+	var my: int = world.solid_top_y(int(mx), int(mz)) + 1
 	var mob := preload("res://scripts/entities/hostile_mob.gd").new()
 	mob.player = player
 	mob.world = world
@@ -499,7 +501,7 @@ func _spawn_clawup(pos: Vector3) -> void:
 			var a := atan2(dz, dx) if hd > 0.01 else _rng.randf_range(0.0, TAU)
 			var nx: float = player.global_position.x + cos(a) * 14.0
 			var nz: float = player.global_position.z + sin(a) * 14.0
-			pos = Vector3(nx, float(world.surface_height(int(nx), int(nz)) + 2), nz)
+			pos = Vector3(nx, float(world.solid_top_y(int(nx), int(nz)) + 1), nz)
 	if hauntfields:
 		hauntfields.clawup_vfx(pos)
 	var mob := preload("res://scripts/entities/hostile_mob.gd").new()
