@@ -51,10 +51,11 @@ const PITCH_MAX := 1.56    # ~+89.4° — look essentially straight up
 const TURN_SPEED := 12.0
 
 # Movement feel: a touch of FOV widening when sprinting + a subtle walk bob.
-const BASE_FOV := 75.0
-const SPRINT_FOV := 83.0
+var base_fov := 75.0           # player-tunable FOV (Settings slider); SPRINT_FOV_ADD stacks on top
+const SPRINT_FOV_ADD := 8.0
 const BOB_FREQ := 9.0      # bob cycles per second of stride
 const BOB_AMP := 0.035     # metres of vertical camera travel at full speed
+const LEAN_MAX := 0.022    # rad (~1.3°) camera bank into strafe at full sprint speed; 0.0 disables
 
 # Original mascot: the voxel explorer-bot (replaces the old humanoid to keep the
 # character unique / copyright-clean). The base glb carries the walk cycle; run +
@@ -182,6 +183,7 @@ var snd_pickup: AudioStreamPlayer
 var snd_monster: AudioStreamPlayer
 var snd_swim: AudioStreamPlayer
 var snd_dawn: AudioStreamPlayer        # a soft birdsong played at sunrise
+var snd_fall_wind: AudioStreamPlayer   # dedicated looping wind voice, ramped by fall speed (not pooled — sustained)
 var _dust_motes: GPUParticles3D        # ambient air dust — suppressed when underground/underwater
 var _atmo_blocked := false             # cached: true when submerged or under solid cover
 var _atmo_t := 0.0
@@ -321,6 +323,9 @@ var _vm_swing := 0.0          # 1->0 swing progress when mining/attacking
 var _vm_swing_spd := 1.5      # attack_speed of the in-flight swing (drives FP chop weight)
 var _vm_heavy := 0.0          # 0..1 ponderousness of the in-flight swing (maul/axe/hammer/mace)
 var _vm_place := 0.0          # 1->0 forward "push" when placing a block
+var _look_sway := Vector2.ZERO       # decaying mouse-look impulse — the held item trails the camera on quick turns
+const LOOK_SWAY_POS := 0.03          # m of viewmodel drift at full deflection (0.0 disables)
+const LOOK_SWAY_ROT := 4.0           # deg of viewmodel counter-tilt at full deflection
 
 func _setup_model() -> void:
 	if not ResourceLoader.exists(MODEL_PATH):
@@ -425,6 +430,19 @@ func _setup_audio() -> void:
 		add_child(v)
 		_voices.append(v)
 
+	# Falling-wind loop (its own voice — sustained, not a pooled one-shot). duplicate() isolates
+	# this copy from the shared ambience wind main.gd loops.
+	snd_fall_wind = AudioStreamPlayer.new()
+	if ResourceLoader.exists("res://assets/audio/ambient/wind.mp3"):
+		var ws: AudioStream = load("res://assets/audio/ambient/wind.mp3").duplicate()
+		if ws is AudioStreamMP3:
+			(ws as AudioStreamMP3).loop = true
+		snd_fall_wind.stream = ws
+	snd_fall_wind.volume_db = -40.0
+	if AudioServer.get_bus_index("SFX") != -1:
+		snd_fall_wind.bus = "SFX"
+	add_child(snd_fall_wind)
+
 func _make_snd(path: String, vol_db: float) -> AudioStreamPlayer:
 	var p := AudioStreamPlayer.new()
 	if ResourceLoader.exists(path):
@@ -466,6 +484,11 @@ func play_craft_sound() -> void:
 ## Settings hook: scale look speed off the base sensitivity (1.0 = default).
 func set_sensitivity(mult: float) -> void:
 	mouse_sens = MOUSE_SENS * clampf(mult, 0.1, 4.0)
+
+## Settings hook: player-preferred field of view (the sprint kick stacks on top).
+## camera.fov lerps toward the target every frame, so a live slider change eases in.
+func set_fov(v: float) -> void:
+	base_fov = clampf(v, 60.0, 110.0)
 
 # --- pooled one-shot particle bursts -------------------------------------------------
 # One BoxMesh + one material are shared by every burst; per-burst tint rides the particle
@@ -521,7 +544,7 @@ func _setup_vfx() -> void:
 ## Fire a reused one-shot burst at `pos`, tinted `color`. Falls back to nothing if the pool
 ## isn't ready (very early calls). gravity is the downward accel magnitude (positive number).
 func _emit_burst(pos: Vector3, color: Color, amount: int, life: float, spread: float,
-		vmin: float, vmax: float, grav: float, dir: Vector3 = Vector3.UP) -> void:
+		vmin: float, vmax: float, grav: float, dir: Vector3 = Vector3.UP, scl: float = 1.0) -> void:
 	var p := _free_vfx()
 	if p == null:
 		return
@@ -532,6 +555,8 @@ func _emit_burst(pos: Vector3, color: Color, amount: int, life: float, spread: f
 	p.initial_velocity_max = vmax
 	p.gravity = Vector3(0, -grav, 0)
 	p.direction = dir                      # default UP; combat/mining pass a world-space direction
+	p.scale_amount_min = scl               # per-burst particle size; MUST be reset every call (pooled)
+	p.scale_amount_max = scl
 	p.color = color
 	p.global_position = pos
 	p.restart()
@@ -674,6 +699,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		yaw_pivot.rotate_y(-event.relative.x * mouse_sens)
 		pitch_pivot.rotation.x = clampf(pitch_pivot.rotation.x - event.relative.y * mouse_sens, PITCH_MIN, PITCH_MAX)
+		if first_person:
+			_look_sway.x = clampf(_look_sway.x + event.relative.x * 0.002, -1.0, 1.0)
+			_look_sway.y = clampf(_look_sway.y + event.relative.y * 0.002, -1.0, 1.0)
 	elif event is InputEventMouseButton and event.pressed:
 		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			# Mouse is free (a menu is open, or window focus was lost). NEVER let the scroll wheel
@@ -733,6 +761,9 @@ func _menu_open() -> bool:
 		return true
 	var ch = get_tree().get_first_node_in_group("chest_ui")
 	if ch and ch.has_method("is_open") and ch.is_open():
+		return true
+	var an = get_tree().get_first_node_in_group("chronicle")
+	if an and an.has_method("is_open") and an.is_open():
 		return true
 	return false
 
@@ -891,8 +922,10 @@ func _animate_viewmodel(delta: float) -> void:
 		var parc := sin((1.0 - _vm_place) * PI)       # quick jab forward + down, then back
 		swing_pos = Vector3(0.0, -0.05 * parc, -0.12 * parc)
 		swing_rot = Vector3(18.0 * parc, 0.0, 0.0)
-	_viewmodel.position = VM_REST_POS + sway + swing_pos
-	_viewmodel.rotation_degrees = swing_rot
+	# Look-lag: trail the camera a touch on quick turns, then ease back to centre.
+	_look_sway = _look_sway.lerp(Vector2.ZERO, minf(1.0, delta * 8.0))
+	_viewmodel.position = VM_REST_POS + sway + swing_pos + Vector3(-_look_sway.x, _look_sway.y, 0.0) * LOOK_SWAY_POS
+	_viewmodel.rotation_degrees = swing_rot + Vector3(_look_sway.y, -_look_sway.x, 0.0) * LOOK_SWAY_ROT
 
 func _merged_aabb(root: Node3D) -> AABB:
 	var result := AABB()
@@ -1112,6 +1145,7 @@ func _physics_process(delta: float) -> void:
 	_update_animation()
 	_animate_viewmodel(delta)
 	_update_footsteps(delta, in_water)
+	_update_fall_whoosh(delta, in_water)
 	_update_camera_feel(delta, sprinting and not flying, on_floor)
 	_update_vitals(delta, dir.length() > 0.5, sprinting)
 
@@ -1203,10 +1237,13 @@ func _update_footsteps(delta: float, in_water: bool) -> void:
 			# Cadence scales with actual speed — sprinting lands quicker footfalls than walking.
 			_step_timer = STEP_INTERVAL * clampf(WALK_SPEED / maxf(horiz, 0.1), 0.6, 1.15)
 			if world_manager:
-				var bt: int = world_manager.get_block(int(global_position.x), int(global_position.y) - 1, int(global_position.z))
-				_play_snd(_step_sound_for(bt))
-				if horiz > 5.0 and bt != VoxelTypes.AIR:   # kick up material dust while sprinting
-					_emit_burst(global_position + Vector3(0, 0.08, 0), VoxelTypes.color_of(bt), 4, 0.3, 88.0, 0.6, 1.4, 5.0)
+				if in_water:
+					_play_snd(snd_swim, -4.0, randf_range(1.05, 1.25))   # wading slosh — dry steps sound wrong waist-deep
+				else:
+					var bt: int = world_manager.get_block(int(global_position.x), int(global_position.y) - 1, int(global_position.z))
+					_play_snd(_step_sound_for(bt))
+					if horiz > 5.0 and bt != VoxelTypes.AIR:   # kick up material dust while sprinting (never underwater)
+						_emit_burst(global_position + Vector3(0, 0.08, 0), VoxelTypes.color_of(bt), 4, 0.3, 88.0, 0.6, 1.4, 5.0)
 	elif in_water and horiz > 0.5:
 		_step_timer -= delta
 		if _step_timer <= 0.0:
@@ -1225,6 +1262,27 @@ func _jump_feedback() -> void:
 		var bt: int = world_manager.get_block(int(global_position.x), int(global_position.y) - 1, int(global_position.z))
 		_play_snd(_step_sound_for(bt))
 	_emit_burst(global_position + Vector3(0, 0.05, 0), Color(0.72, 0.66, 0.52), 6, 0.35, 80.0, 0.6, 1.6, 5.0)
+
+## Rushing-air whoosh that swells with fall speed — long drops audibly accelerate before the
+## thud. Silent below ~9 m/s (normal jumps never trigger it), full at damaging speeds. The
+## `flying` gate is load-bearing: fly-descend is 10 m/s, just over the onset.
+func _update_fall_whoosh(delta: float, in_water: bool) -> void:
+	if snd_fall_wind == null or snd_fall_wind.stream == null:
+		return
+	var t := clampf((_fall_speed - 9.0) / 13.0, 0.0, 1.0)   # 9 m/s -> whisper, 22 m/s (past FALL_DAMAGE_SPEED) -> full
+	if flying or in_water or _dead:
+		t = 0.0
+	if t > 0.0:
+		if not snd_fall_wind.playing:
+			snd_fall_wind.volume_db = -34.0    # reset: a hard-stop (death/void respawn) skips the fade,
+			snd_fall_wind.pitch_scale = 0.85   # so the next fall must start at the whisper, not full blast
+			snd_fall_wind.play()
+		snd_fall_wind.volume_db = lerpf(snd_fall_wind.volume_db, lerpf(-34.0, -12.0, t), delta * 8.0)
+		snd_fall_wind.pitch_scale = lerpf(snd_fall_wind.pitch_scale, 0.85 + 0.45 * t, delta * 8.0)
+	elif snd_fall_wind.playing:
+		snd_fall_wind.volume_db = lerpf(snd_fall_wind.volume_db, -44.0, delta * 10.0)
+		if snd_fall_wind.volume_db < -42.0:
+			snd_fall_wind.stop()
 
 ## The footstep / placement sound matching the material underfoot (or being placed):
 ## stone-family clack, sandy crunch, hollow wood knock, soft grass/dirt otherwise.
@@ -1274,7 +1332,7 @@ func _update_camera_feel(delta: float, sprinting: bool, on_floor: bool) -> void:
 	if camera == null:
 		return
 	var horiz := _horiz_speed
-	var target_fov := SPRINT_FOV if (sprinting and horiz > WALK_SPEED + 0.5) else BASE_FOV
+	var target_fov := (base_fov + SPRINT_FOV_ADD) if (sprinting and horiz > WALK_SPEED + 0.5) else base_fov
 	# Asymmetric FOV: snap WIDE fast on sprint-engage (a whoosh of speed), settle back at the
 	# original rate so sprint-release doesn't read floaty.
 	var fov_rate := 12.0 if target_fov > camera.fov else 8.0
@@ -1302,9 +1360,13 @@ func _update_camera_feel(delta: float, sprinting: bool, on_floor: bool) -> void:
 	# Landing dip: the view drops on impact then springs back, reading as the knees absorbing
 	# the fall (the squash magnitude was set on landing, scaled by fall speed).
 	tgt_y -= _land_squash * BOB_AMP * 6.0
+	# Bank into lateral motion: velocity-driven (not input-driven) so it also settles naturally
+	# when sliding to a stop. Set LEAN_MAX to 0.0 to disable.
+	var lv := yaw_pivot.global_transform.basis.inverse() * velocity
+	var lean := clampf(lv.x / SPRINT_SPEED, -1.0, 1.0) * LEAN_MAX
 	camera.position.x = lerpf(camera.position.x, tgt_x, delta * 10.0)
 	camera.position.y = lerpf(camera.position.y, tgt_y, delta * 14.0)
-	camera.rotation.z = lerpf(camera.rotation.z, tgt_x * 0.6, delta * 10.0)
+	camera.rotation.z = lerpf(camera.rotation.z, tgt_x * 0.6 - lean, delta * 10.0)
 
 func _update_vitals(delta: float, moving: bool, sprinting: bool) -> void:
 	if _regen_block > 0.0:
@@ -1448,6 +1510,7 @@ func _mine_terrain() -> void:
 		if mine_anim != "": _mine_timer = 0.45   # > swing interval (0.35) so the looping mine clip plays smoothly, no idle-flicker between swings
 		_play_snd(snd_swing)
 		_weapon_swing(0.35)
+		_land_squash = maxf(_land_squash, 0.12)   # ~1 cm camera nod per swing — the mining rhythm reads in the view, not just the audio
 		# Chips fly off the targeted face each swing (previously particles only fired at break time).
 		if ray.is_colliding():
 			var hp := ray.get_collision_point()
@@ -1566,7 +1629,8 @@ func _try_place() -> void:
 		global_position.y = float(cell.y) + 1.0
 		velocity.y = 0.0
 	inventory.remove_one(selected)
-	_play_snd(snd_place)
+	_play_snd(snd_place, -5.0)                 # soft generic 'set' under the material knock
+	_play_snd(_step_sound_for(id), 2.0, 0.9)   # material-matched placement knock, pitched below a footstep
 	_vm_place = 1.0                        # first-person placing "push" on the viewmodel
 	# A small dust poof on placement (matches the break-particle feedback).
 	_emit_burst(Vector3(cell) + Vector3(0.5, 0.5, 0.5), VoxelTypes.color_of(id), 8, 0.4, 78.0, 0.8, 2.0, 5.0)
@@ -1706,7 +1770,7 @@ func _update_shake(delta: float) -> void:
 		camera.h_offset = 0.0
 		camera.v_offset = 0.0
 
-func hurt(amount: int) -> void:
+func hurt(amount: int, from_pos := Vector3.INF) -> void:
 	if amount <= 0 or _hurt_cd > 0.0 or _dead or _invuln > 0.0:
 		return
 	if armor_tier > 0:
@@ -1723,6 +1787,13 @@ func hurt(amount: int) -> void:
 	get_tree().call_group("ducker", "duck", 0.6, 0.5)
 	if hud and hud.has_method("flash_damage"):
 		hud.flash_damage(0.28 + 0.4 * sev) # red screen flash, deeper on a big hit
+	# Directional tell: light the screen edge facing the attacker (yaw basis, so pitch doesn't skew it).
+	if from_pos.is_finite() and hud and hud.has_method("indicate_damage_from"):
+		var rel := from_pos - global_position
+		rel.y = 0.0
+		if rel.length_squared() > 0.01:
+			var local: Vector3 = yaw_pivot.global_transform.basis.inverse() * rel
+			hud.indicate_damage_from(Vector2(local.x, -local.z).normalized())
 	# A short dark-red impact mist on the body (3rd-person tell, symmetric with the mob-hit spray).
 	_emit_burst(global_position + Vector3(0, 1.0, 0), Color(0.8, 0.12, 0.12), 8, 0.25, 40.0, 1.5, 3.5, 6.0)
 	health -= amount
@@ -1740,6 +1811,8 @@ func _enter_death() -> void:
 	emit_signal("died_at", global_position)   # Hauntfields: the ground remembers where you fell
 	velocity = Vector3.ZERO
 	_reset_mining()
+	if snd_fall_wind and snd_fall_wind.playing:
+		snd_fall_wind.stop()   # _physics_process early-returns while dead, so the fade would never run
 	if highlight:
 		highlight.visible = false
 	_hide_crack()
@@ -1851,6 +1924,8 @@ func _respawn() -> void:
 	# over a cave/edited column, and at negative coords — all must land standing on solid ground.
 	global_position = _ground_at(spawn_point.x, spawn_point.z)
 	_fall_speed = 0.0
+	if snd_fall_wind and snd_fall_wind.playing:
+		snd_fall_wind.stop()   # void-plunge respawns mid-whoosh — no wind tail at the spawn point
 	_was_on_floor = true
 	_landed_once = false
 	_respawn_grace = 0.4           # let gravity (not the streaming pin) close any residual gap
@@ -1907,6 +1982,7 @@ func _spawn_land_dust() -> void:
 
 func _spawn_break_particles(pos: Vector3, color: Color) -> void:
 	_emit_burst(pos, color, 12, 0.6, 70.0, 1.5, 3.0, 9.0)
+	_emit_burst(pos, color.darkened(0.15), 6, 0.5, 55.0, 2.4, 4.4, 15.0, Vector3.UP, 2.6)   # 6 chunky ~0.29m shards, thrown harder, heavier gravity so they arc and thud
 
 func _cell_from_hit(offset: float) -> Vector3i:
 	var p := ray.get_collision_point()

@@ -209,6 +209,9 @@ func _die() -> void:
 		tw.parallel().tween_property(_model, "position:y", _model_rest_y - 0.3, 0.4) \
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 		tw.parallel().tween_property(_model, "scale", _model.scale * 0.7, 0.5).set_delay(0.1)
+		tw.tween_callback(func() -> void:
+			if player and is_instance_valid(player) and player.has_method("_emit_burst"):
+				player._emit_burst(global_position + Vector3(0, 0.25, 0), Color(0.86, 0.80, 0.70), 8, 0.5, 78.0, 0.7, 1.8, 2.5))   # tan dust masks the pop-out
 		tw.tween_callback(queue_free)
 	else:
 		queue_free()

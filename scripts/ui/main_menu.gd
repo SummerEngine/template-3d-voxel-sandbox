@@ -7,8 +7,7 @@ extends Control
 const BG_PATH := "res://assets/textures/menu/background.png"
 const LOGO_PATH := "res://assets/textures/menu/logo.png"
 const CHROMA_PATH := "res://assets/materials/chroma_key.gdshader"
-const VERSION := "v1.2.3"
-const PROFILE_NAME := "BlockyBuilder"
+const PROFILE_NAME := "BlockyBuilder"   # version string lives in UITheme.VERSION (single source of truth)
 
 const OPTIONS := [
 	{"id": "single", "text": "SINGLE PLAYER", "kind": "primary"},
@@ -39,6 +38,7 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	add_child(preload("res://scripts/core/audio_ducker.gd").new())   # creates audio buses
 	GameSettings.apply_audio(get_tree())                              # saved volume levels
+	GameSettings.apply_window()                                       # persisted fullscreen/windowed mode
 	_build()
 	get_viewport().size_changed.connect(_layout_menu)
 	_layout_menu()
@@ -136,6 +136,7 @@ func _build() -> void:
 	_build_music()
 	_build_click_sfx()
 	_build_settings()
+	_build_toast()
 
 ## A UI click on every menu button, matching the in-game pause/chest/crafting menus
 ## (the title screen was the one silent screen). Loads the same ui/click.mp3 on the SFX bus.
@@ -153,6 +154,9 @@ func _play_click() -> void:
 	if _snd_click and _snd_click.stream:
 		_snd_click.play()
 
+## Built ONCE from _build(). (This block was accidentally swallowed into _play_click by an
+## earlier edit — that leaked a fresh Label per click and stranded visible toasts forever.)
+func _build_toast() -> void:
 	_toast = Label.new()
 	_toast.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_toast.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
@@ -233,16 +237,30 @@ func _build_settings() -> void:
 	var title := Label.new()
 	title.text = "SETTINGS"
 	title.add_theme_font_size_override("font_size", 32)
+	title.add_theme_constant_override("outline_size", 6)                       # match the pause-menu twin
+	title.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(title)
 	var pct := func(v): return "%d%%" % roundi(v * 100.0)
 	var dec := func(v): return "%.2fx" % v
 	var whole := func(v): return "%d" % int(v)
+	var deg := func(v): return "%d°" % int(v)
 	vb.add_child(UITheme.setting_row("Master", 0.0, 1.0, 0.05, GameSettings.master, pct, _mm_master))
 	vb.add_child(UITheme.setting_row("Music", 0.0, 1.0, 0.05, GameSettings.music, pct, _mm_music))
 	vb.add_child(UITheme.setting_row("Sound FX", 0.0, 1.0, 0.05, GameSettings.sfx, pct, _mm_sfx))
 	vb.add_child(UITheme.setting_row("Look speed", 0.3, 2.5, 0.05, GameSettings.sensitivity, dec, _mm_sens))
+	vb.add_child(UITheme.setting_row("Field of view", 60, 110, 1, GameSettings.fov, deg, _mm_fov))
 	vb.add_child(UITheme.setting_row("View distance", 2, 8, 1, GameSettings.render_radius, whole, _mm_render))
+	var fs_cb := CheckButton.new()
+	fs_cb.text = "Fullscreen"
+	fs_cb.button_pressed = GameSettings.fullscreen
+	fs_cb.add_theme_color_override("font_color", Color(1, 1, 1))
+	fs_cb.toggled.connect(func(v: bool) -> void:
+		GameSettings.fullscreen = v
+		GameSettings.apply_window()
+		GameSettings.save_cfg()
+		_play_click())
+	vb.add_child(fs_cb)
 	var more := Label.new()
 	more.text = "Key rebinding & Eerie-events toggle: in-game (Esc → Settings)"
 	more.add_theme_font_size_override("font_size", 14)
@@ -269,6 +287,9 @@ func _mm_sfx(v: float) -> void:
 func _mm_sens(v: float) -> void:
 	GameSettings.sensitivity = v; GameSettings.save_cfg()
 
+func _mm_fov(v: float) -> void:
+	GameSettings.fov = v; GameSettings.save_cfg()
+
 func _mm_render(v: float) -> void:
 	GameSettings.render_radius = int(v); GameSettings.save_cfg()
 
@@ -278,7 +299,7 @@ func _close_settings() -> void:
 
 func _build_version() -> void:
 	var v := Label.new()
-	v.text = VERSION
+	v.text = UITheme.VERSION
 	v.add_theme_font_size_override("font_size", 16)
 	v.add_theme_constant_override("outline_size", 4)
 	v.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))

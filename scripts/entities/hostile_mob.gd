@@ -542,6 +542,9 @@ func _die() -> void:
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 		tw.parallel().tween_property(_model, "scale", _model.scale * 0.6, 0.55) \
 			.set_delay(0.1)
+		tw.tween_callback(func() -> void:
+			if player and is_instance_valid(player) and player.has_method("_emit_burst"):
+				player._emit_burst(global_position + Vector3(0, 0.25, 0), Color(0.32, 0.30, 0.28), 10, 0.5, 78.0, 0.7, 1.8, 2.5))   # dark puff masks the pop-out
 		tw.tween_callback(queue_free)
 	else:
 		queue_free()
@@ -605,7 +608,7 @@ func _physics_process(delta: float) -> void:
 						_snd_attack.pitch_scale = _voice_pitch * _rng.randf_range(0.95, 1.05)
 						_snd_attack.play()
 					if player.has_method("hurt"):
-						player.hurt(damage)
+						player.hurt(damage, global_position)   # position lets the HUD flash the edge facing us
 						if player.has_method("push"):
 							var kb := Vector3(to.x, 0.0, to.z).normalized()   # shove the player back
 							player.push(kb * (5.0 if brute else 3.0) + Vector3.UP * 1.2)

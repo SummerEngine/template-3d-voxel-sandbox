@@ -73,6 +73,7 @@ func _ready() -> void:
 	add_child(_arrow)
 
 	_layout()
+	get_viewport().size_changed.connect(_layout)   # re-anchor on window resize (every other overlay does)
 	_start_redraw()
 
 func _layout() -> void:

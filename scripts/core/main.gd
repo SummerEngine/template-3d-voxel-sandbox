@@ -460,6 +460,14 @@ func _spawn_hostiles(n: int, blood := false) -> void:
 
 ## Instantiate one queued siege mob around the player's CURRENT position (so a staggered spawn
 ## still surrounds them even if they've moved).
+## True when the standable top of the column under (x, z) is a player-built (override) block.
+## ONE predicate shared by every mob spawner so the "never on the base wall" rule can't drift.
+## floori (not int) so negative coordinates check the column the mob actually stands in.
+func _spot_on_player_build(x: float, z: float) -> bool:
+	var cx := floori(x)
+	var cz := floori(z)
+	return world.overrides.has(Vector3i(cx, world.solid_top_y(cx, cz), cz))
+
 func _spawn_one_hostile(spec: Dictionary) -> void:
 	var ang := _rng.randf_range(0.0, TAU)
 	var rad := _rng.randf_range(12.0, 20.0)
@@ -472,7 +480,20 @@ func _spawn_one_hostile(spec: Dictionary) -> void:
 	var mz: float = player.global_position.z + sin(ang) * rad
 	# Spawn on the REAL solid top (cave/edit/tree-stump aware), not the 2D-noise surface — otherwise
 	# a mob embeds in terrain (and falls) or lands perched on a 1-wide tree stump and gets stuck.
-	var my: int = world.solid_top_y(int(mx), int(mz)) + 1
+	# floori, NOT int(): truncation picks the wrong column at negative coords (the mob's collider
+	# occupies floor(x), so an int() guard misses player walls across half the map).
+	var my: int = world.solid_top_y(floori(mx), floori(mz)) + 1
+	# ...but never standing ON a player-built block: solid_top_y is edit-aware, so without this a
+	# zombie materializes on the base wall/roof and drops INSIDE the defenses. Bounded re-roll;
+	# if the player is fully ringed by builds the last roll stands (degrades to today, never worse).
+	for _retry in range(4):
+		if not _spot_on_player_build(mx, mz):
+			break
+		ang = _rng.randf_range(0.0, TAU)
+		rad = _rng.randf_range(12.0, 20.0)
+		mx = player.global_position.x + cos(ang) * rad
+		mz = player.global_position.z + sin(ang) * rad
+		my = world.solid_top_y(floori(mx), floori(mz)) + 1
 	var mob := preload("res://scripts/entities/hostile_mob.gd").new()
 	mob.player = player
 	mob.world = world
@@ -501,7 +522,14 @@ func _spawn_clawup(pos: Vector3) -> void:
 			var a := atan2(dz, dx) if hd > 0.01 else _rng.randf_range(0.0, TAU)
 			var nx: float = player.global_position.x + cos(a) * 14.0
 			var nz: float = player.global_position.z + sin(a) * 14.0
-			pos = Vector3(nx, float(world.solid_top_y(int(nx), int(nz)) + 1), nz)
+			# Same never-on-a-built-block guard as the siege spawner (re-roll the angle).
+			for _retry in range(4):
+				if not _spot_on_player_build(nx, nz):
+					break
+				a = _rng.randf_range(0.0, TAU)
+				nx = player.global_position.x + cos(a) * 14.0
+				nz = player.global_position.z + sin(a) * 14.0
+			pos = Vector3(nx, float(world.solid_top_y(floori(nx), floori(nz)) + 1), nz)
 	if hauntfields:
 		hauntfields.clawup_vfx(pos)
 	var mob := preload("res://scripts/entities/hostile_mob.gd").new()

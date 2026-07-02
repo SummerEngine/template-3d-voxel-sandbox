@@ -54,8 +54,11 @@ func _apply() -> void:
 	var sun_ang := time_of_day * TAU
 	var sun_dir := Vector3(cos(sun_ang), sin(sun_ang), 0.30).normalized()   # direction TO the sun
 	_sun.look_at_from_position(Vector3.ZERO, -sun_dir, Vector3.UP)
+	var glow: float = clampf(1.0 - absf(elev) * 3.0, 0.0, 1.0)   # peaks at dawn/dusk (shared with the sky below)
 	_sun.light_energy = maxf(lerpf(0.04, 1.45, daylight), 0.32 * blood)   # eerie red moonlight
-	_sun.light_color = NIGHT_SUN.lerp(DAY_SUN, daylight).lerp(BLOOD_SUN, blood)
+	# Golden hour: warm the DIRECT light at dawn/dusk to match the sky/fog glow (blood stays last
+	# so siege nights land on BLOOD_SUN regardless).
+	_sun.light_color = NIGHT_SUN.lerp(DAY_SUN, daylight).lerp(Color(1.0, 0.62, 0.30), glow * 0.55).lerp(BLOOD_SUN, blood)
 	# Always on so shadows fade smoothly with the sun's energy at dawn/dusk instead of popping at a
 	# threshold; near-zero night energy (~0.04) makes them imperceptible.
 	_sun.shadow_enabled = true
@@ -69,7 +72,6 @@ func _apply() -> void:
 		_env.adjustment_brightness = lerpf(1.0, 1.03, clampf(1.0 - absf(elev) * 3.0, 0.0, 1.0))
 
 	if _sky:
-		var glow: float = clampf(1.0 - absf(elev) * 3.0, 0.0, 1.0)   # peaks at dawn/dusk
 		var horizon := NIGHT_HORIZON.lerp(DAY_HORIZON, daylight).lerp(DUSK_GLOW, glow * 0.6).lerp(BLOOD_HORIZON, blood)
 		_sky.set_shader_parameter("top_color", NIGHT_TOP.lerp(DAY_TOP, daylight).lerp(BLOOD_TOP, blood))
 		_sky.set_shader_parameter("horizon_color", horizon)

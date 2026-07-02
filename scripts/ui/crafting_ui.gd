@@ -183,7 +183,7 @@ func _build() -> void:
 
 	# Scrollable recipe list, grouped by category.
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(600, 430)
+	scroll.custom_minimum_size = Vector2(600, 380)   # one row shorter so the Close button doesn't grow the panel past a 16:9 canvas
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	vb.add_child(scroll)
 	var list := VBoxContainer.new()
@@ -207,8 +207,13 @@ func _build() -> void:
 			row_nodes.append(rn)
 		_cat_sections[cat] = {"header": header, "rows": row_nodes}
 
+	var close_btn := UITheme.make_button("Close", "normal", Vector2(140, 40))
+	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	close_btn.pressed.connect(close)
+	vb.add_child(close_btn)
+
 	var hint := Label.new()
-	hint.text = "Each row: ingredients  →  what you craft.   A red count = you're missing some.   Press C to close."
+	hint.text = "Each row: ingredients  →  what you craft.   A red count = you're missing some.   Press C or Esc to close."
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.modulate = Color(1, 1, 1, 0.6)
 	vb.add_child(hint)
@@ -433,6 +438,9 @@ func toggle() -> void:
 	var c = get_tree().get_first_node_in_group("chest_ui")
 	if c and c.has_method("is_open") and c.is_open():
 		return                                  # don't open over an open chest
+	var an = get_tree().get_first_node_in_group("chronicle")
+	if an and an.has_method("is_open") and an.is_open():
+		return                                  # nor over the Monolith's Annals dialog
 	open_for("hand")
 
 ## Open the screen in a context: "hand" (C key — basics anywhere), "table" (Crafting

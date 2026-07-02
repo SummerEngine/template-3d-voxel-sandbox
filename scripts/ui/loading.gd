@@ -123,6 +123,14 @@ func _build_ui() -> void:
 	_tip.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	vb.add_child(_tip)
 
+	var ver := Label.new()
+	ver.text = UITheme.VERSION
+	ver.add_theme_font_size_override("font_size", 14)
+	ver.modulate = Color(1, 1, 1, 0.5)
+	ver.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ver.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	vb.add_child(ver)
+
 ## Recursively collect every heavy asset path under `dir_path`.
 func _gather(dir_path: String) -> void:
 	var da := DirAccess.open(dir_path)

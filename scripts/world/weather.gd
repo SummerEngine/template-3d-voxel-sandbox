@@ -60,9 +60,12 @@ var _label: Label
 var _rain: GPUParticles3D
 var _snow: GPUParticles3D
 var _sand: GPUParticles3D
+var _splash: GPUParticles3D              # rain impact pops on the ground plane under the player
+var _splash_y := 0.0                     # cached ground height for the splash plane (0.3s throttle)
 var _sand_mat: ParticleProcessMaterial   # cached so the per-frame sandstorm update skips a Vector3+sqrt+cast
 var _sand_dir := Vector3.ZERO            # cached normalized sand drift direction (invariant)
 var _thunder_t := 0.0
+var _bolt := 0.0                         # lightning world-flash decay (sun+ambient spike)
 
 # audio (one looping bed, fade-swapped on change; plus thunder one-shots)
 var _bed: AudioStreamPlayer
@@ -144,7 +147,12 @@ func _build_particles() -> void:
 			Vector3(0, -1.5, 0), Vector3(0.14, 0.14, 0.14), Color(0.86, 0.70, 0.42, 0.7))
 	_sand_mat = _sand.process_material as ParticleProcessMaterial   # cache for the per-frame sandstorm update
 	_sand_dir = Vector3(1, 0.05, 0.3).normalized()
-	for p in [_rain, _snow, _sand]:
+	# Rain impact pops: a flat emitter pinned to the ground plane so the rain visibly lands.
+	_splash = _make_particles(150, 0.35, Vector3(0, 1, 0), 65.0, 1.6, 3.8,
+			Vector3(0, -13.0, 0), Vector3(0.05, 0.05, 0.05), Color(0.75, 0.85, 1.0, 0.6))
+	(_splash.process_material as ParticleProcessMaterial).emission_box_extents = Vector3(9, 0.02, 9)   # flat ground plane, not the 17x1x17 sky box
+	_splash.local_coords = false   # ground pops must STAY where they landed, not slide with the player
+	for p in [_rain, _snow, _sand, _splash]:
 		p.emitting = false
 		add_child(p)
 
@@ -215,6 +223,10 @@ func _process(delta: float) -> void:
 		_derive_weather()
 		_sheltered = _check_sheltered()
 		_desert = world.has_method("_is_desert") and world._is_desert(int(player.global_position.x), int(player.global_position.z))
+		if world.has_method("solid_top_y"):   # ground plane for rain splashes (edit-aware: roofs/floors count)
+			# Clamped to sea level: solid_top_y skips water, and rain-on-water should splash on the
+			# SURFACE, not the seabed.
+			_splash_y = maxf(float(world.solid_top_y(floori(player.global_position.x), floori(player.global_position.z))), float(world.SEA_LEVEL)) + 1.04
 
 	_apply_visuals(delta)
 	_update_particles()
@@ -290,7 +302,7 @@ func _derive_weather() -> void:
 		_intensity = 0.0
 
 # --- visuals -------------------------------------------------------------------------
-func _apply_visuals(_delta: float) -> void:
+func _apply_visuals(delta: float) -> void:
 	_env.adjustment_enabled = true
 	_env.adjustment_saturation = lerpf(SEASON_SAT[season], 0.85, _cloud * 0.5)
 
@@ -337,6 +349,13 @@ func _apply_visuals(_delta: float) -> void:
 	_weather_rect.color = wcol
 	_sun.light_energy *= dim
 	_env.ambient_light_energy *= lerpf(1.0, 0.78, _cloud)
+	# Lightning world-flash: the strike brightens the actual scene, not just the screen rect.
+	# DayNight re-sets sun/ambient from absolutes each frame BEFORE this runs, so the spike
+	# self-clears — quadratic falloff = hard strike then fast ~0.33s decay matching the rect fade.
+	if _bolt > 0.0:
+		_sun.light_energy += 4.5 * _bolt * _bolt
+		_env.ambient_light_energy += 1.6 * _bolt * _bolt
+		_bolt = maxf(0.0, _bolt - delta * 3.0)
 
 func _update_particles() -> void:
 	var base: Vector3 = player.global_position
@@ -351,6 +370,15 @@ func _update_particles() -> void:
 	_sand.emitting = open and weather == Weather.SANDSTORM
 	if _sand.emitting:
 		_sand_mat.direction = _sand_dir
+	# Ground splashes ride the rain gate (current-frame value) and sit on the cached ground plane.
+	# Gated so a clear day costs one bool compare — no transform/ratio writes while not raining.
+	# The _splash_y > 0 guard skips the first storm tick before the throttle has measured the ground.
+	var want_splash: bool = _rain.emitting and _splash_y > 0.0
+	if _splash.emitting != want_splash:
+		_splash.emitting = want_splash
+	if want_splash:
+		_splash.global_position = Vector3(base.x, _splash_y, base.z)
+		_splash.amount_ratio = clampf(0.3 + _intensity * 0.7, 0.0, 1.0)   # drizzle -> few pops, storm -> full
 
 ## True when there are solid blocks just above the player's head (cave / building roof),
 ## so precipitation and its screen tint are suppressed indoors.
@@ -372,6 +400,7 @@ func _update_lightning(delta: float) -> void:
 		_thunder_t = randf_range(6.0, 14.0)
 		if not _sheltered:                       # no sky-flash through a cave roof; thunder is still heard
 			_flash_rect.color = Color(1, 1, 1, 0.55)
+			_bolt = 1.0                          # spike the sun+ambient too (world flash, decays in _apply_visuals)
 			var tw := create_tween()
 			tw.tween_property(_flash_rect, "color:a", 0.0, 0.5)
 		if _snd_thunder and _snd_thunder.stream:

@@ -107,6 +107,13 @@ func _build() -> void:
 	_toast.modulate = Color(0.8, 1.0, 0.8)
 	vb.add_child(_toast)
 
+	var ver := Label.new()
+	ver.text = UITheme.VERSION
+	ver.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ver.add_theme_font_size_override("font_size", 13)
+	ver.modulate = Color(1, 1, 1, 0.45)
+	vb.add_child(ver)
+
 	_build_settings()
 
 ## In-game settings overlay (same sliders as the main menu) that applies LIVE to the running
@@ -153,11 +160,25 @@ func _build_settings() -> void:
 	var pct := func(v): return "%d%%" % roundi(v * 100.0)
 	var dec := func(v): return "%.2fx" % v
 	var whole := func(v): return "%d" % int(v)
+	var deg := func(v): return "%d°" % int(v)
 	list.add_child(UITheme.setting_row("Master", 0.0, 1.0, 0.05, GameSettings.master, pct, _on_master))
 	list.add_child(UITheme.setting_row("Music", 0.0, 1.0, 0.05, GameSettings.music, pct, _on_music))
 	list.add_child(UITheme.setting_row("Sound FX", 0.0, 1.0, 0.05, GameSettings.sfx, pct, _on_sfx))
 	list.add_child(UITheme.setting_row("Look speed", 0.3, 2.5, 0.05, GameSettings.sensitivity, dec, _on_sens))
+	list.add_child(UITheme.setting_row("Field of view", 60, 110, 1, GameSettings.fov, deg, _on_fov))
 	list.add_child(UITheme.setting_row("View distance", 2, 8, 1, GameSettings.render_radius, whole, _on_render))
+
+	# Fullscreen (persisted; applied live — the standard first thing anyone opens Settings for).
+	var fs_cb := CheckButton.new()
+	fs_cb.text = "Fullscreen"
+	fs_cb.button_pressed = GameSettings.fullscreen
+	fs_cb.add_theme_color_override("font_color", Color(1, 1, 1))
+	fs_cb.toggled.connect(func(v: bool) -> void:
+		GameSettings.fullscreen = v
+		GameSettings.apply_window()
+		GameSettings.save_cfg()
+		_play_click())
+	list.add_child(fs_cb)
 
 	# "Eerie events" — the world-unease systems (mirages, blind-spot edits). Ships on; can be silenced.
 	var unease_cb := CheckButton.new()
@@ -206,6 +227,7 @@ func _begin_capture(action: String, btn: Button) -> void:
 	_play_click()
 	_capturing_action = action
 	btn.text = "Press a key…  (Esc cancels)"
+	get_viewport().gui_release_focus()   # focused controls would eat arrows/Enter before _unhandled_input sees them
 
 func _reset_controls() -> void:
 	InputActions.reset()
@@ -233,6 +255,12 @@ func _on_sens(v: float) -> void:
 		player.set_sensitivity(v)
 	GameSettings.save_cfg()
 
+func _on_fov(v: float) -> void:
+	GameSettings.fov = v
+	if player and player.has_method("set_fov"):
+		player.set_fov(v)
+	GameSettings.save_cfg()
+
 func _on_render(v: float) -> void:
 	GameSettings.render_radius = int(v)
 	if world and world.has_method("set_render_radius"):
@@ -249,11 +277,14 @@ func _open_settings() -> void:
 		if _settings_scroll:
 			_settings_scroll.custom_minimum_size.y = _settings_scroll_cap()   # re-fit if the window resized
 		_settings_panel.visible = true
+		get_viewport().gui_release_focus()   # don't let arrows/Enter drive the pause column hidden under this overlay
 
 func _close_settings() -> void:
 	_capturing_action = ""                        # drop any pending rebind capture
 	if _settings_panel:
 		_settings_panel.visible = false
+	if paused and _resume_btn:
+		_resume_btn.grab_focus()                  # restore keyboard nav on the main column
 
 func _settings_open() -> bool:
 	return _settings_panel != null and _settings_panel.visible
@@ -284,10 +315,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		else:
 			var cu = get_tree().get_first_node_in_group("crafting_ui")
 			var c = get_tree().get_first_node_in_group("chest_ui")
+			var an = get_tree().get_first_node_in_group("chronicle")
 			if cu and cu.has_method("is_open") and cu.is_open():
 				cu.close()                           # first Esc closes crafting (was falling through to pause)
 			elif c and c.has_method("is_open") and c.is_open():
 				c.close()                            # first Esc closes an open chest
+			elif an and an.has_method("is_open") and an.is_open():
+				an.close_annals()                    # first Esc closes the Monolith's Annals dialog
 			else:
 				_pause()
 		get_viewport().set_input_as_handled()
@@ -295,6 +329,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func _pause() -> void:
 	get_tree().call_group("crafting_ui", "close")   # never stack with crafting
 	get_tree().call_group("chest_ui", "close")
+	get_tree().call_group("chronicle", "close_annals")   # nor with the Annals dialog
 	paused = true
 	get_tree().paused = true
 	if _toast:

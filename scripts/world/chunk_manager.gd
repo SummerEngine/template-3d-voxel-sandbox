@@ -407,6 +407,39 @@ func _process(delta: float) -> void:
 	while n < LOADS_PER_FRAME and not _queue.is_empty():
 		_load(_queue.pop_front())
 		n += 1
+	# Live flame flicker on every NEARBY torch — per-cell phase so a wall of torches doesn't
+	# pulse in unison. The 2.6 base is the flicker midpoint, so lighting balance is unchanged.
+	# Proximity gate (reclassified ~3x/s): far torches skip the flicker write AND get their
+	# ember emitter + crackle voice paused, so per-frame cost is bounded by what's audible/visible,
+	# not by every torch ever placed.
+	if not torches.is_empty():
+		_torch_clock += delta
+		_torch_gate_t -= delta
+		var reclassify := _torch_gate_t <= 0.0
+		if reclassify:
+			_torch_gate_t = 0.3
+		var pp := player.global_position
+		for cell in torches:
+			var t = torches[cell]
+			if not is_instance_valid(t):
+				continue
+			if reclassify:
+				var near: bool = t.position.distance_squared_to(pp) < 1600.0   # ~40 m > light 9.5 + crackle 12
+				t.set_meta("near", near)
+				var emb: CPUParticles3D = t.get_meta("embers", null)
+				if emb:
+					emb.emitting = near
+				var sp: AudioStreamPlayer3D = t.get_meta("crackle", null)
+				if sp and sp.stream:
+					sp.stream_paused = not near
+			if not t.get_meta("near", false):
+				continue
+			var l: OmniLight3D = t.get_meta("light", null)
+			# The > 1.6 check keeps the flicker's hands off a light the Hollows' gutter-dim tween
+			# owns (it drags energy to 0.5 as a horror tell; the flicker must not overwrite it).
+			if l and l.light_energy > 1.6:
+				var ph := float((cell.x * 31 + cell.z * 17 + cell.y * 7) % 97)
+				l.light_energy = 2.6 + 0.30 * sin(_torch_clock * 8.0 + ph) + 0.14 * sin(_torch_clock * 21.0 + ph * 1.7)
 
 ## A finishing chunk calls this on the main thread before applying its mesh; returns
 ## false once this frame's quota is spent, so applies spread across frames (no hitch).
@@ -478,6 +511,8 @@ func _load(c: Vector2i, sync := false) -> void:
 
 # --- torches (placeable light props; not voxels) ---------------------------------
 var torches: Dictionary = {}   # Vector3i cell -> StaticBody3D (light + emissive head)
+var _torch_clock := 0.0        # shared flicker clock (per-torch phase comes from the cell coords)
+var _torch_gate_t := 0.0       # countdown to the next proximity reclassification (~3x/s)
 
 func has_torch(cell: Vector3i) -> bool:
 	return torches.has(cell)
@@ -491,6 +526,10 @@ func place_torch(cell: Vector3i) -> bool:
 	t.position = Vector3(cell) + Vector3(0.5, 0.5, 0.5)
 	add_child(t)
 	torches[cell] = t
+	# Start the crackle de-phased so a wall of torches doesn't chorus in sync.
+	var sp := t.get_node_or_null("Crackle") as AudioStreamPlayer3D
+	if sp and sp.stream:
+		sp.play(randf() * minf(3.0, maxf(sp.stream.get_length() - 0.05, 0.0)))
 	return true
 
 func remove_torch(cell: Vector3i) -> bool:
@@ -521,6 +560,20 @@ static func _shared_torch_mat() -> StandardMaterial3D:
 		_torch_mat = m
 	return _torch_mat
 
+# Shared ember particle mesh (one emissive box for every torch's drift emitter).
+static var _ember_mesh: BoxMesh
+static func _shared_ember_mesh() -> BoxMesh:
+	if _ember_mesh == null:
+		_ember_mesh = BoxMesh.new()
+		_ember_mesh.size = Vector3(0.05, 0.05, 0.05)
+		var m := StandardMaterial3D.new()
+		m.albedo_color = Color(1.0, 0.55, 0.12)
+		m.emission_enabled = true
+		m.emission = Color(1.0, 0.5, 0.1)
+		m.emission_energy_multiplier = 2.5
+		_ember_mesh.material = m
+	return _ember_mesh
+
 func _make_torch(_cell: Vector3i) -> Node3D:
 	var root := Node3D.new()
 	var mi := MeshInstance3D.new()
@@ -534,6 +587,45 @@ func _make_torch(_cell: Vector3i) -> Node3D:
 	light.position = Vector3(0, 0.2, 0)
 	light.shadow_enabled = false
 	root.add_child(light)
+	root.set_meta("light", light)   # the _process flicker looks the light up via this meta
+	# Rising embers: a tiny live flame on the player's primary night/cave light source.
+	var emb := CPUParticles3D.new()
+	emb.mesh = _shared_ember_mesh()
+	emb.amount = 3
+	emb.lifetime = 0.9
+	emb.direction = Vector3.UP
+	emb.spread = 14.0
+	emb.initial_velocity_min = 0.5
+	emb.initial_velocity_max = 1.1
+	emb.gravity = Vector3(0, 0.9, 0)   # embers rise
+	emb.scale_amount_min = 0.4
+	emb.scale_amount_max = 0.9
+	emb.position = Vector3(0, 0.25, 0)
+	root.add_child(emb)
+	root.set_meta("embers", emb)    # proximity gate toggles far emitters off (CPU particles tick per-frame)
+	# Positional fire crackle (quiet, ~12 m falloff) so a lit base is acoustically alive.
+	var snd := AudioStreamPlayer3D.new()
+	snd.name = "Crackle"
+	var crackle_path := "res://assets/audio/sfx/blocks/torch_crackle.wav"
+	if ResourceLoader.exists(crackle_path):
+		var st = load(crackle_path)
+		if st is AudioStreamMP3:
+			st.loop = true
+		elif st is AudioStreamWAV:
+			st.loop_mode = AudioStreamWAV.LOOP_FORWARD
+			# A WAV imported without looping has loop_end = 0 — enabling LOOP_FORWARD against a
+			# zero-length region renders silence. Set the region to the full sample explicitly.
+			var bps: int = 2 if st.format == AudioStreamWAV.FORMAT_16_BITS else 1
+			st.loop_begin = 0
+			st.loop_end = st.data.size() / (bps * (2 if st.stereo else 1))
+		snd.stream = st
+	snd.volume_db = -16.0
+	snd.unit_size = 2.5
+	snd.max_distance = 12.0
+	if AudioServer.get_bus_index("SFX") != -1:
+		snd.bus = "SFX"
+	root.add_child(snd)
+	root.set_meta("crackle", snd)   # proximity gate pauses far voices (they'd still cost mixing time)
 	return root
 
 ## Block edit: rebuild off the main thread so placing/breaking never freezes the frame

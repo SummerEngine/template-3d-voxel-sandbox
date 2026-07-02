@@ -4,6 +4,7 @@ class_name UITheme
 ## buttons (blue primary / gold / teal normal / red danger), so both screens match.
 
 const FONT_SIZE := 22
+const VERSION := "v1.2.3"   # single source of truth — shown on the menu, pause footer and loading screen
 
 static func panel_box() -> StyleBoxFlat:
 	var s := StyleBoxFlat.new()

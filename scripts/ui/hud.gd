@@ -27,6 +27,7 @@ var _prev_counts: Array = []    # last-seen count per slot, to pulse a slot when
 var _style_normal: StyleBoxFlat
 var _style_selected: StyleBoxFlat
 var _dmg_flash: ColorRect
+var _dir_flash: Array = []       # 4 screen-edge strips (L/R/top/bottom) lit toward an attacker
 var _vignette: TextureRect       # sustained red edge-vignette that pulses when health is low
 var _low_active := false
 var _low_intensity := 0.0
@@ -154,6 +155,27 @@ func _build() -> void:
 	_dmg_flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_dmg_flash.modulate = Color(1, 1, 1, 0.0)
 	add_child(_dmg_flash)
+
+	# Directional damage strips: 4 gradient edges (left/right/top/bottom) lit toward the attacker.
+	# Alpha-0 by default; indicate_damage_from() flashes the edge(s) facing the hit source.
+	var efrom := [Vector2(0, 0.5), Vector2(1, 0.5), Vector2(0.5, 0), Vector2(0.5, 1)]
+	var eto := [Vector2(1, 0.5), Vector2(0, 0.5), Vector2(0.5, 1), Vector2(0.5, 0)]
+	for i in range(4):
+		var eg := Gradient.new()
+		eg.set_color(0, Color(0.8, 0.02, 0.02, 0.9))
+		eg.set_color(1, Color(0.8, 0.02, 0.02, 0.0))
+		var et := GradientTexture2D.new()
+		et.gradient = eg
+		et.fill_from = efrom[i]
+		et.fill_to = eto[i]
+		var er := TextureRect.new()
+		er.texture = et
+		er.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		er.stretch_mode = TextureRect.STRETCH_SCALE
+		er.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		er.modulate = Color(1, 1, 1, 0.0)
+		add_child(er)
+		_dir_flash.append(er)
 
 	# Low-health vignette: a radial gradient that's clear in the centre and dark red at the
 	# edges, faded out by default and pulsed in (via _process) only when health is critical.
@@ -460,6 +482,11 @@ func _layout() -> void:
 	if _dmg_flash:
 		_dmg_flash.position = Vector2.ZERO
 		_dmg_flash.size = vp
+	if _dir_flash.size() == 4:
+		_dir_flash[0].position = Vector2.ZERO;             _dir_flash[0].size = Vector2(vp.x * 0.12, vp.y)
+		_dir_flash[1].position = Vector2(vp.x * 0.88, 0);  _dir_flash[1].size = Vector2(vp.x * 0.12, vp.y)
+		_dir_flash[2].position = Vector2.ZERO;             _dir_flash[2].size = Vector2(vp.x, vp.y * 0.14)
+		_dir_flash[3].position = Vector2(0, vp.y * 0.86);  _dir_flash[3].size = Vector2(vp.x, vp.y * 0.14)
 	if _vignette:
 		_vignette.position = Vector2.ZERO
 		_vignette.size = vp
@@ -488,8 +515,8 @@ func _layout() -> void:
 		_death_dim.size = vp
 		_death_title.size = Vector2(vp.x, 80)
 		_death_title.position = Vector2(0, vp.y * 0.5 - 130)
-		_death_sub.size = Vector2(vp.x, 30)
-		_death_sub.position = Vector2(0, vp.y * 0.5 - 40)
+		_death_sub.size = Vector2(vp.x, 56)                 # two lines (run stat + respawn hint)
+		_death_sub.position = Vector2(0, vp.y * 0.5 - 52)
 		_respawn_btn.position = Vector2(vp.x * 0.5 - 110, vp.y * 0.5 + 10)
 
 ## A brief fading message in the centre of the screen.
@@ -510,6 +537,9 @@ func flash_tool_weak(id: int) -> void:
 func show_death() -> void:
 	if _death_dim == null:
 		return
+	# Scoreboard moment: headline how far the run got, from the live Day/Night readout.
+	if _time_label and _time_label.text != "":
+		_death_sub.text = "You made it to %s\nPress R or click Respawn" % _time_label.text
 	for n in [_death_dim, _death_title, _death_sub, _respawn_btn]:
 		n.visible = true
 	_death_dim.modulate.a = 0.0
@@ -574,6 +604,22 @@ func flash_damage(intensity := 0.45) -> void:
 	_dmg_flash.modulate.a = clampf(intensity, 0.0, 1.0)
 	var tw := create_tween()
 	tw.tween_property(_dmg_flash, "modulate:a", 0.0, 0.4)
+
+## Light the screen edge(s) facing the attacker. local_dir is view-space (x=right, y=forward).
+## Front hits deliberately don't light an edge — you can already see the attacker;
+## only flanks and rear get the extra tell.
+func indicate_damage_from(local_dir: Vector2) -> void:
+	if _dir_flash.size() != 4:
+		return
+	var strengths := [maxf(-local_dir.x, 0.0), maxf(local_dir.x, 0.0), 0.0, maxf(-local_dir.y, 0.0)]
+	for i in range(4):
+		var s: float = strengths[i]
+		if s < 0.35:
+			continue
+		var e: Control = _dir_flash[i]
+		e.modulate.a = maxf(e.modulate.a, 0.85 * s)
+		var tw2 := create_tween()
+		tw2.tween_property(e, "modulate:a", 0.0, 0.6)
 
 ## Pulse the low-health vignette in (and out) every frame. Lives outside the FPS-overlay gate
 ## so it runs whether or not F3 is up.

@@ -13,6 +13,8 @@ static var master := 1.0
 static var music := 1.0
 static var sfx := 1.0
 static var sensitivity := 1.0      # multiplier on the player's base mouse sensitivity
+static var fov := 75.0             # first-person field of view in degrees (60..110)
+static var fullscreen := false     # borderless fullscreen window mode
 static var render_radius := 4      # chunks streamed around the player (2..8)
 static var keybinds := {}          # action name -> physical keycode (overrides; see InputActions)
 static var world_unease := true    # the world quietly acts behind your back (mirages, blind-spot edits)
@@ -29,6 +31,8 @@ static func load_cfg() -> void:
 	music = float(cf.get_value("audio", "music", music))
 	sfx = float(cf.get_value("audio", "sfx", sfx))
 	sensitivity = float(cf.get_value("input", "sensitivity", sensitivity))
+	fov = float(cf.get_value("video", "fov", fov))
+	fullscreen = bool(cf.get_value("video", "fullscreen", fullscreen))
 	render_radius = int(cf.get_value("world", "render_radius", render_radius))
 	world_unease = bool(cf.get_value("gameplay", "world_unease", world_unease))
 	var kb = cf.get_value("input", "keybinds", {})
@@ -41,6 +45,8 @@ static func save_cfg() -> void:
 	cf.set_value("audio", "music", music)
 	cf.set_value("audio", "sfx", sfx)
 	cf.set_value("input", "sensitivity", sensitivity)
+	cf.set_value("video", "fov", fov)
+	cf.set_value("video", "fullscreen", fullscreen)
 	cf.set_value("world", "render_radius", render_radius)
 	cf.set_value("gameplay", "world_unease", world_unease)
 	cf.set_value("input", "keybinds", keybinds)
@@ -68,5 +74,15 @@ static func apply_gameplay(player, world) -> void:
 	load_cfg()
 	if player and player.has_method("set_sensitivity"):
 		player.set_sensitivity(sensitivity)
+	if player and player.has_method("set_fov"):
+		player.set_fov(fov)
 	if world and world.has_method("set_render_radius"):
 		world.set_render_radius(render_radius)
+
+## Apply the persisted window mode (borderless fullscreen vs windowed). Idempotent —
+## only touches the window when the mode actually differs.
+static func apply_window() -> void:
+	load_cfg()
+	var target := DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen else DisplayServer.WINDOW_MODE_WINDOWED
+	if DisplayServer.window_get_mode() != target:
+		DisplayServer.window_set_mode(target)

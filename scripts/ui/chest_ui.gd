@@ -14,6 +14,7 @@ var _panel: Control
 var _chest_slots: Array = []     # {swatch, count}
 var _inv_slots: Array = []
 var _snd: AudioStreamPlayer
+var _snd_open: AudioStreamPlayer   # open whoosh (crafting's ui/open.mp3) — open ≠ slot-click
 var _toast: Label                # status line for blocked/partial stack moves
 var open := false
 
@@ -28,6 +29,13 @@ func _ready() -> void:
 	if AudioServer.get_bus_index("SFX") != -1:
 		_snd.bus = "SFX"
 	add_child(_snd)
+	_snd_open = AudioStreamPlayer.new()
+	if ResourceLoader.exists("res://assets/audio/sfx/ui/open.mp3"):
+		_snd_open.stream = load("res://assets/audio/sfx/ui/open.mp3")
+	_snd_open.volume_db = -10.0
+	if AudioServer.get_bus_index("SFX") != -1:
+		_snd_open.bus = "SFX"
+	add_child(_snd_open)
 	_panel.visible = false
 
 func is_open() -> bool:
@@ -124,7 +132,11 @@ func open_chest(cell: Vector3i) -> void:
 	open = true
 	_panel.visible = true
 	if _toast: _toast.text = ""
-	_play()
+	if _snd_open and _snd_open.stream:   # open = whoosh, close/slot-moves = click (matches crafting)
+		_snd_open.pitch_scale = randf_range(0.97, 1.03)
+		_snd_open.play()
+	else:
+		_play()
 	_refresh()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
