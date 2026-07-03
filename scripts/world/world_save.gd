@@ -91,6 +91,25 @@ static func _monoliths_data(world) -> Array:
 		out.append([cell.x, cell.y, cell.z, world.monoliths[cell]])
 	return out
 
+## The grid cells the Structures system has already evaluated (so a demolished ruin — walls AND
+## chest broken — stays demolished across a reload instead of re-stamping into the world).
+static func _structures_data(world) -> Array:
+	var out: Array = []
+	var st = world.get_tree().get_first_node_in_group("structures") if world.is_inside_tree() else null
+	if st and "_stamped" in st:
+		for k in st._stamped.keys():
+			out.append([k.x, k.y])
+	return out
+
+static func structures_from(data: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	var raw = data.get("structures", [])
+	if raw is Array:
+		for e in raw:
+			if e is Array and e.size() >= 2:
+				out[Vector2i(int(e[0]), int(e[1]))] = true
+	return out
+
 static func monoliths_from(data: Dictionary) -> Dictionary:
 	var out: Dictionary = {}
 	for e in data.get("monoliths", []):
@@ -129,6 +148,7 @@ static func save(world, player, day_night, weather = null) -> bool:
 		"hollows": world.hollow_scores.duplicate(),
 		"hollow_calmed": world.hollow_calmed.duplicate(),
 		"monoliths": _monoliths_data(world),
+		"structures": _structures_data(world),
 	}
 	var f := FileAccess.open(PATH, FileAccess.WRITE)
 	if f == null:

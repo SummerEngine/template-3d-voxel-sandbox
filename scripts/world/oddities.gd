@@ -215,6 +215,13 @@ func _is_watched() -> bool:
 		return false
 	return not _out_of_view(p)
 
+## Force-revert any live oddity NOW (called before a save so a temporary blind-spot edit is
+## never serialized into world.overrides as a permanent phantom block). _revert already guards
+## each kind and self-clears _active, so this is idempotent and no-ops when nothing is active.
+func revert_active() -> void:
+	if not _active.is_empty():
+		_revert()
+
 func _revert() -> void:
 	match _active.get("kind", ""):
 		"torch":

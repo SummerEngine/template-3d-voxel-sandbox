@@ -34,6 +34,20 @@ func add(id: int, n: int = 1) -> int:
 				return 0
 	return n
 
+## Cheap, non-mutating check: how much room exists for `id` (stacks into matching
+## slots first, then empty slots). Returns early once it has enough for `n`, so a
+## caller asking for 1 slot rarely scans the whole inventory.
+func has_room(id: int, n: int = 1) -> int:
+	var room := 0
+	for s in slots:
+		if s.count == 0:
+			room += STACK_MAX
+		elif s.id == id and s.count > 0:
+			room += STACK_MAX - s.count
+		if room >= n:
+			return room
+	return room
+
 func id_of(idx: int) -> int:
 	return slots[idx].id if idx >= 0 and idx < SIZE else VoxelTypes.AIR
 

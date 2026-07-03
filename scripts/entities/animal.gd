@@ -97,6 +97,10 @@ func _build_visual() -> void:
 				_fit_model(model, 0.95)
 				model.rotation.y = ANIMAL_YAW; _model = model; _model_rest_y = model.position.y
 				_flash_meshes = model.find_children("*", "MeshInstance3D", true, false)
+				# Small passive bodies cast near-worthless dynamic shadows (esp. at night); a herd's
+				# worth of casters isn't worth it. Turn shadow casting OFF on the loaded model.
+				for m in _flash_meshes:
+					(m as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 				return
 	_build_box_fallback()
 
@@ -118,6 +122,9 @@ func _build_box_fallback() -> void:
 	head.position = Vector3(0, 0.7, 0.6)
 	add_child(head)
 	_flash_meshes = [body, head]
+	# Match the GLB path: the fallback body/head shouldn't cast dynamic shadows either.
+	for m in _flash_meshes:
+		(m as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 ## One shared white-emissive flash material for ALL animals — its properties never vary, so
 ## there's no need to allocate a fresh StandardMaterial3D on every hit.
@@ -305,7 +312,7 @@ func _compute_separation() -> void:
 	_sep = Vector3.ZERO
 	var count := 0
 	var r2 := SEP_RADIUS * SEP_RADIUS   # compare squared distances; skip the sqrt for the far majority
-	for m in get_tree().get_nodes_in_group("mob"):
+	for m in HostileMob.mobs_snapshot(get_tree()):   # one shared "mob" query per frame (see HostileMob)
 		if m == self or not is_instance_valid(m):
 			continue
 		var d: Vector3 = global_position - (m as Node3D).global_position

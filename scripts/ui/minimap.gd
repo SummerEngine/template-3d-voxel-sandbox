@@ -25,6 +25,7 @@ var _tex: ImageTexture
 var _rect: TextureRect
 var _border: Panel
 var _arrow: Label
+var _legend: Control          # biome colour-key VBox (built once in _ready); shown only when the map is expanded
 var _t := 0.0
 var _full := false
 var _cam = null                 # cached player camera (stable node, resolved once — avoids a per-frame Variant lookup)
@@ -72,6 +73,29 @@ func _ready() -> void:
 	_arrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	add_child(_arrow)
 
+	# Biome colour-key — built ONCE here (not in _layout, which re-runs on resize/every M toggle and would leak rows).
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 2)
+	for key in COLORS:
+		var hbox := HBoxContainer.new()
+		hbox.add_theme_constant_override("separation", 5)
+		var swatch := ColorRect.new()
+		swatch.color = COLORS[key]
+		swatch.custom_minimum_size = Vector2(14, 14)
+		hbox.add_child(swatch)
+		var lbl := Label.new()
+		lbl.text = String(key).capitalize()
+		lbl.add_theme_font_size_override("font_size", 13)
+		lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+		lbl.add_theme_constant_override("outline_size", 4)
+		lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+		lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		hbox.add_child(lbl)
+		vbox.add_child(hbox)
+	_legend = vbox
+	_legend.visible = false
+	add_child(_legend)
+
 	_layout()
 	get_viewport().size_changed.connect(_layout)   # re-anchor on window resize (every other overlay does)
 	_start_redraw()
@@ -88,8 +112,22 @@ func _layout() -> void:
 	_arrow.pivot_offset = Vector2(11, 12)
 	_arrow.position = pos + Vector2(s, s) * 0.5 - Vector2(11, 12)
 
+	if _legend != null:
+		_legend.visible = _full
+		if _full:
+			# Sit the legend just to the right of the centred border, clamped inside the viewport.
+			var lsize := _legend.get_combined_minimum_size()
+			var lpos := Vector2(pos.x + s + 10.0, pos.y)
+			if lpos.x + lsize.x > vp.x:
+				lpos.x = pos.x - lsize.x - 10.0        # no room on the right — fall back to the left of the border
+			lpos.x = clampf(lpos.x, 4.0, maxf(4.0, vp.x - lsize.x - 4.0))
+			lpos.y = clampf(lpos.y, 4.0, maxf(4.0, vp.y - lsize.y - 4.0))
+			_legend.position = lpos
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_M:
+		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+			return                              # a modal menu is open (mouse freed) — ignore M so the map can't get stuck expanded
 		_full = not _full
 		_layout()
 		_start_redraw()

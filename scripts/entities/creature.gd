@@ -481,7 +481,10 @@ func _pick_dir(fleeing := false) -> void:
 	if fleeing and player and is_instance_valid(player):
 		var away: Vector3 = global_position - player.global_position
 		a = atan2(away.x, away.z) + _rng.randf_range(-0.5, 0.5)
-		_dir = Vector3(sin(a), 0.0, cos(a))
+		var pitch := 0.0
+		if _mode != GROUND:
+			pitch = _rng.randf_range(-0.25, 0.25)
+		_dir = Vector3(sin(a), pitch, cos(a)).normalized()
 	elif _mode == GROUND and _rng.randf() < 0.3:
 		_dir = Vector3.ZERO                              # graze / rest
 	else:

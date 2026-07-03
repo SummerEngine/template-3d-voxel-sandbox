@@ -8,6 +8,7 @@ const InputActions := preload("res://scripts/core/input_actions.gd")
 const ANIMAL_COUNT := 6
 const NIGHT_MOB_COUNT := 3     # a real first-night threat; +2 per night survived up to the cap
 const MAX_NIGHT_MOBS := 16
+const ABSOLUTE_MAX_MOBS := 24  # hard ceiling on a normal night's horde (protects the frame budget); blood moons add a bounded few
 const BLOOD_MOON_EVERY := 5    # every Nth night is a red-sky siege peak (more mobs + brutes)
 const CAVE_MOB_MAX := 4        # lurkers maintained around a player who is deep underground
 const CAVE_DEPTH := 5.0        # blocks below the surface before caves spawn hostiles
@@ -158,8 +159,10 @@ func _ready() -> void:
 	# scattered as you explore — each holding a loot chest. Makes exploration rewarding.
 	var structures := preload("res://scripts/world/structures.gd").new()
 	structures.name = "Structures"
+	structures.add_to_group("structures")   # so the save path can read _stamped
 	structures.setup(world, player)
 	add_child(structures)
+	structures._stamped = WorldSave.structures_from(save)   # already-evaluated cells (empty for a new world) — a demolished ruin stays demolished
 
 	# Farming: tilled soil + growing crops the player plants and harvests.
 	var farm := preload("res://scripts/world/farm.gd").new()
@@ -178,6 +181,7 @@ func _ready() -> void:
 
 	var oddities := preload("res://scripts/world/oddities.gd").new()
 	oddities.name = "Oddities"
+	oddities.add_to_group("oddities")   # so the save path can force-revert a live edit before serializing
 	oddities.setup(world, player, day_night, weather)
 	add_child(oddities)
 
@@ -368,8 +372,8 @@ func _spawn_animals() -> void:
 	var cx := 0
 	var cz := 0
 	if player:
-		cx = int(player.global_position.x)
-		cz = int(player.global_position.z)
+		cx = floori(player.global_position.x)
+		cz = floori(player.global_position.z)
 	for i in range(ANIMAL_COUNT):
 		# Find a dry spot near the player (a few tries; skip ocean/lake).
 		var ax := cx
@@ -401,14 +405,23 @@ func _on_phase_changed(is_night: bool) -> void:
 		if hud:
 			if hud.has_method("set_blood_moon"): hud.set_blood_moon(blood)
 			if hud.has_method("set_time_state"): hud.set_time_state(true, night_no, blood)
-		var count: int = mini(MAX_NIGHT_MOBS, NIGHT_MOB_COUNT + _nights * 2)
+		# Escalation: +2/night, then a slow late-game creep past the old flat cap (sqrt-shaped so it
+		# keeps growing after ~night 8 instead of flatlining, but never runs away). Nights 1-7 unchanged.
+		var count: int = mini(ABSOLUTE_MAX_MOBS, NIGHT_MOB_COUNT + _nights * 2 + int(sqrt(float(maxi(0, _nights - 7))) * 2.0))
+		var bm := 0
 		if night_no == 1:
 			count = maxi(2, int(count / 3.0))   # gentle first night so new players can find their feet before the siege escalates
 		if blood:
-			count = mini(MAX_NIGHT_MOBS + 6, count + 5)   # they come in force
+			@warning_ignore("integer_division")
+			bm = night_no / BLOOD_MOON_EVERY   # 1st blood moon, 2nd, ... — grows in teeth (more brutes), not just numbers
+			count = mini(ABSOLUTE_MAX_MOBS + 6, count + 5 + bm)   # they come in force, bounded
 			if _stinger and _stinger.stream:
 				_stinger.play()                            # ominous blood-moon sting
-		_spawn_hostiles(count, blood)
+		# Nightfall lands as a beat: a jolt of camera trauma + a brief music duck under the toast.
+		if player and player.has_method("add_trauma"):
+			player.add_trauma(0.15)
+		get_tree().call_group("ducker", "duck", 0.6, 0.5)
+		_spawn_hostiles(count, blood, bm)
 		# On a blood moon, part of the horde erupts straight out of your densest killing grounds.
 		if blood and hauntfields:
 			var targets: Array = hauntfields.blood_moon_targets(3)
@@ -424,6 +437,7 @@ func _on_phase_changed(is_night: bool) -> void:
 	else:
 		_ignite_hostiles()      # dawn: the horde catches fire and burns down rather than blinking out
 		if day_night:
+			day_night.last_blood = day_night.blood_moon   # latch BEFORE clearing so chronicle can read it
 			day_night.blood_moon = false
 		_nights += 1
 		if hud:
@@ -432,22 +446,32 @@ func _on_phase_changed(is_night: bool) -> void:
 		if player:
 			if player.has_method("play_dawn_sound"):
 				player.play_dawn_sound()   # birdsong relief beat at sunrise
+			if player.has_method("add_trauma"):
+				player.add_trauma(0.06)    # soft dawn "exhale" — a gentle release beat (P1)
+			get_tree().call_group("ducker", "duck", 0.3, 0.7)
 			if player.has_signal("night_survived"):
 				player.emit_signal("night_survived")
 			if player.hud and player.hud.has_method("show_toast"):
-				player.hud.show_toast("Night %d survived" % _nights, Color(0.7, 1.0, 0.8))
+				# Signpost the escalation after the FIRST survival so a new player knows more is coming.
+				if _nights == 1:
+					player.hud.show_toast("Night 1 survived — they come in greater numbers tomorrow. Raise walls and light torches today.", Color(0.7, 1.0, 0.8))
+				else:
+					player.hud.show_toast("Night %d survived" % _nights, Color(0.7, 1.0, 0.8))
 
 ## QUEUE the horde rather than instantiating it all at once — instantiating 16 skinned zombies
 ## in a single frame hitched nightfall hard. _process drains the queue a few per frame.
-func _spawn_hostiles(n: int, blood := false) -> void:
+func _spawn_hostiles(n: int, blood := false, bm := 0) -> void:
 	_clear_hostiles()
 	if player == null:
 		return
 	var bonus_hp := mini(_nights * 4, 28)                  # cap so late mobs aren't damage sponges
 	var bonus_dmg := mini(floori(float(_nights) / 2.0), 4) # ramps faster; base damage is now 2
+	# Later blood moons pack MORE brutes (denser every-Nth), so the siege grows in teeth, not just
+	# headcount: bm 0 -> every 4th, bm 1 -> every 3rd, bm 2+ -> every 2nd. Floor of 2 keeps it sane.
+	var brute_every: int = maxi(2, 4 - bm)
 	for i in range(n):
 		# Brutes anchor the horde: several on blood moons, one on tougher regular nights.
-		var is_brute: bool = (blood and i % 4 == 0) or (not blood and _nights >= 4 and i == 0)
+		var is_brute: bool = (blood and i % brute_every == 0) or (not blood and _nights >= 4 and i == 0)
 		# Some of the rest run — lean, fast, frail. Keeps the horde varied and the chase tense.
 		var is_runner: bool = (not is_brute) and _nights >= 1 and _rng.randf() < 0.35
 		_spawn_queue.append({
@@ -603,27 +627,27 @@ func _process(delta: float) -> void:
 	for i in range(_cave_mobs.size() - 1, -1, -1):
 		var m = _cave_mobs[i]
 		if is_instance_valid(m):
-			var ms: int = world.surface_height(int(m.global_position.x), int(m.global_position.z))
+			var ms: int = world.surface_height(floori(m.global_position.x), floori(m.global_position.z))
 			if m.global_position.y >= float(ms) - 1.5:
 				m.queue_free()
 				_cave_mobs.remove_at(i)
 	# Spawn only while genuinely underground, and never on top of an active night siege.
 	var siege: bool = day_night != null and day_night.is_night() and not _hostiles.is_empty()
-	var px := int(player.global_position.x)
-	var pz := int(player.global_position.z)
+	var px := floori(player.global_position.x)
+	var pz := floori(player.global_position.z)
 	var underground: bool = player.global_position.y < float(world.surface_height(px, pz)) - CAVE_DEPTH
 	if underground and not siege and _cave_mobs.size() < CAVE_MOB_MAX:
 		_spawn_cave_mob()
 
 func _spawn_cave_mob() -> void:
-	var cy := int(player.global_position.y)
+	var cy := floori(player.global_position.y)
 	for _try in range(10):
 		var ox := _rng.randi_range(-11, 11)
 		var oz := _rng.randi_range(-11, 11)
 		if absi(ox) < 4 and absi(oz) < 4:
 			continue                                   # never right on top of the player
-		var cx := int(player.global_position.x) + ox
-		var cz := int(player.global_position.z) + oz
+		var cx := floori(player.global_position.x) + ox
+		var cz := floori(player.global_position.z) + oz
 		# A standable air pocket in the dark: head + body clear, solid floor under it.
 		if world.get_block(cx, cy, cz) == VoxelTypes.AIR \
 				and world.get_block(cx, cy + 1, cz) == VoxelTypes.AIR \

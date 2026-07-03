@@ -84,7 +84,10 @@ func _on_kill(_pos: Vector3) -> void:
 		_engrave("A hundred slain — the dead know this name.")
 
 func _on_night() -> void:
-	if day_night and day_night.blood_moon:
+	# Read the LATCHED blood flag, not the live one: main.gd clears day_night.blood_moon at dawn
+	# BEFORE emitting night_survived (which drives this), so the live flag is always false here.
+	# last_blood captures the night that was actually survived (set in main.gd before the clear).
+	if day_night and day_night.last_blood:
 		_engrave("Endured a blood-rimmed moon.")
 	elif _day <= 2 and _has_bound and world.monoliths.has(_bound) and world.monoliths[_bound].size() <= 1:
 		_engrave("Survived the first night.")   # gated on a fresh stone so a loaded save can't re-fire it
@@ -113,7 +116,9 @@ func _grow_if_due(count: int) -> void:
 	var want: int = mini(count / STACK_EVERY, MAX_STACK)
 	for k in range(1, want + 1):
 		var c := _bound + Vector3i(0, k, 0)
-		if world.get_block(c.x, c.y, c.z) == VoxelTypes.AIR:
+		# Only grow into NATURAL air — never into player-edited space (a carved room, a gap in a
+		# build). Guarding just for AIR would let the column punch through a player's interior.
+		if world.get_block(c.x, c.y, c.z) == VoxelTypes.AIR and not world.overrides.has(c):
 			world.set_block(c.x, c.y, c.z, VoxelTypes.POLISHED_STONE)
 
 # ---------- Annals UI ----------

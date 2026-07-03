@@ -262,6 +262,11 @@ func _build_zombie_rig() -> void:
 	_model = rig
 	_model_rest_y = 0.0
 	_articulated = true
+	# Night sun energy is ~0.04, so a horde of small blocky bodies each casting a shadow buys
+	# almost no visual payoff (faint blocky self-shadows on voxel ground) for tens of extra dynamic
+	# shadow casters. Turn shadow casting OFF on every rig mesh.
+	for m in rig.find_children("*", "MeshInstance3D", true, false):
+		(m as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 # Rig meshes share one material per colour across EVERY zombie (instead of a fresh
 # StandardMaterial3D per box per mob), so a 16-strong horde reuses ~4 materials, not ~112 —
@@ -553,7 +558,18 @@ func _physics_process(delta: float) -> void:
 	if _dying:
 		return                                  # frozen while the death topple tween plays
 	if _emerging:
-		return                                  # clawing up out of the ground — hold still until the tween ends
+		# Clawing up out of the ground: hold AI + horizontal movement, but STILL apply gravity so a
+		# body whose feet were placed over air (solid_top_y+1) settles down instead of hanging
+		# suspended for the ~0.7s emerge tween. Must return BEFORE _animate() — the emerge tween owns
+		# _model.position.y, so the walk/bob animator must not fight it.
+		if not is_on_floor():
+			velocity.y -= gravity * delta
+		else:
+			velocity.y = 0.0
+		velocity.x = 0.0
+		velocity.z = 0.0
+		move_and_slide()
+		return
 	if _attack_cd > 0.0:
 		_attack_cd -= delta
 
@@ -662,11 +678,25 @@ func _physics_process(delta: float) -> void:
 ## Accumulate a push away from up to a few nearby mobs (zombies + fauna share the "mob" group),
 ## so a converging horde spreads into a loose ring instead of stacking on one point. Throttled
 ## (every 0.2 s) and capped at 6 neighbours, so it's cheap even on a full blood-moon siege.
+# Memoize the "mob" group query to ONE call per frame, shared by every HostileMob AND every
+# Animal (they call HostileMob.mobs_snapshot too). Was a fresh whole-group Array allocation per
+# mob per ~0.2s throttle tick — O(N) allocs on top of the O(N²) neighbour scan every siege frame.
+# Same membership as get_nodes_in_group, so it's output-identical; iterators still guard with
+# is_instance_valid since a cached snapshot can briefly outlive a queue_free'd node.
+static var _mob_cache: Array = []
+static var _mob_frame := -1
+static func mobs_snapshot(tree: SceneTree) -> Array:
+	var f := Engine.get_process_frames()
+	if f != _mob_frame:
+		_mob_frame = f
+		_mob_cache = tree.get_nodes_in_group("mob")
+	return _mob_cache
+
 func _compute_separation() -> void:
 	_sep = Vector3.ZERO
 	var count := 0
 	var r2 := SEP_RADIUS * SEP_RADIUS   # compare squared distances; skip the sqrt for the far majority
-	for m in get_tree().get_nodes_in_group("mob"):
+	for m in HostileMob.mobs_snapshot(get_tree()):
 		if m == self or not is_instance_valid(m):
 			continue
 		var d: Vector3 = global_position - (m as Node3D).global_position

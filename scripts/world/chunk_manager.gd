@@ -432,6 +432,13 @@ func _process(delta: float) -> void:
 				var sp: AudioStreamPlayer3D = t.get_meta("crackle", null)
 				if sp and sp.stream:
 					sp.stream_paused = not near
+				# A 9.5 m OmniLight lights nothing at the 40 m cutoff, yet a lit base can hold
+				# dozens of them all occupying a forward-cluster slot. Cull the surplus ACTIVE
+				# lights by proximity (reclassify branch only — never per-frame). shadow_enabled
+				# is already false, so this touches no shadow map.
+				var far_l: OmniLight3D = t.get_meta("light", null)
+				if far_l:
+					far_l.visible = near
 			if not t.get_meta("near", false):
 				continue
 			var l: OmniLight3D = t.get_meta("light", null)

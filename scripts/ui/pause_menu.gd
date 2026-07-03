@@ -15,6 +15,7 @@ var _toast: Label
 var _snd_click: AudioStreamPlayer
 var _settings_panel: Control
 var _settings_scroll: ScrollContainer   # holds the sliders+rebinds; height-capped so BACK stays reachable
+var _settings_back: Button              # focused when the Settings overlay opens so it's keyboard-navigable
 var _capturing_action := ""        # while non-empty, the next key press rebinds this action
 var _rebind_btns := {}             # action -> Button (its label shows the current key)
 var _resume_btn: Button            # focused on open so the pause menu is keyboard/controller navigable
@@ -222,6 +223,7 @@ func _build_settings() -> void:
 	back.pressed.connect(_play_click)
 	back.pressed.connect(_close_settings)
 	vb.add_child(back)
+	_settings_back = back   # grabbed on open so the overlay is keyboard/controller-navigable
 
 func _begin_capture(action: String, btn: Button) -> void:
 	_play_click()
@@ -277,7 +279,12 @@ func _open_settings() -> void:
 		if _settings_scroll:
 			_settings_scroll.custom_minimum_size.y = _settings_scroll_cap()   # re-fit if the window resized
 		_settings_panel.visible = true
-		get_viewport().gui_release_focus()   # don't let arrows/Enter drive the pause column hidden under this overlay
+		# Move focus INTO the overlay (BACK), not just off the hidden pause column — otherwise
+		# keyboard/controller users have no focused control and the overlay is a dead end until Esc.
+		if _settings_back:
+			_settings_back.grab_focus()
+		else:
+			get_viewport().gui_release_focus()
 
 func _close_settings() -> void:
 	_capturing_action = ""                        # drop any pending rebind capture
@@ -291,6 +298,11 @@ func _settings_open() -> bool:
 
 func _save() -> void:
 	if world and player:
+		# Undo any live blind-spot oddity FIRST so its temporary edit isn't frozen into the save
+		# as a permanent phantom block (revert erases the override, leaving a clean snapshot).
+		var od := get_tree().get_first_node_in_group("oddities")
+		if od and od.has_method("revert_active"):
+			od.revert_active()
 		var ok: bool = WorldSave.save(world, player, day_night, weather)
 		_toast.text = "World saved" if ok else "Save failed"
 	else:

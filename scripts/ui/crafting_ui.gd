@@ -95,6 +95,8 @@ var _taught_resonator := false   # teach the new right-click verbs once, on firs
 var _taught_monolith := false
 var _mat_slots: Array = []     # {panel, swatch, count} per inventory slot
 var _mat_empty: Label          # "gather materials" hint shown when you have nothing yet
+var _gate_hint: Label          # context gate hint: tells hand-crafters that tools/armor need a Crafting Table
+var _recipe_scroll: ScrollContainer   # recipe list scroll; its min height is capped to fit short windows
 var _recipe_rows: Array = []   # {btn, idx}
 var _snd_click: AudioStreamPlayer
 var _snd_open: AudioStreamPlayer
@@ -129,6 +131,16 @@ func _out_name(r: Dictionary) -> String:
 
 func _out_color(r: Dictionary) -> Color:
 	return r.get("out_color", VoxelTypes.color_of(int(r.get("out_id", 0))))
+
+## Recipe-scroll height that keeps the Close button on-screen: full 380 on tall windows,
+## shrinking (down to 200) on short ones (mirrors pause_menu.gd's viewport-fit approach).
+func _recipe_scroll_cap() -> float:
+	return clampf(get_viewport().get_visible_rect().size.y - 380.0, 200.0, 380.0)
+
+## Re-fit the recipe scroll if the window is resized while the panel is open.
+func _on_viewport_resized() -> void:
+	if _recipe_scroll:
+		_recipe_scroll.custom_minimum_size.y = _recipe_scroll_cap()
 
 func _build() -> void:
 	_panel = Control.new()
@@ -183,8 +195,10 @@ func _build() -> void:
 
 	# Scrollable recipe list, grouped by category.
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(600, 380)   # one row shorter so the Close button doesn't grow the panel past a 16:9 canvas
+	scroll.custom_minimum_size = Vector2(600, _recipe_scroll_cap())   # capped so the Close button stays on-screen in short windows
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_recipe_scroll = scroll
+	get_viewport().size_changed.connect(_on_viewport_resized)
 	vb.add_child(scroll)
 	var list := VBoxContainer.new()
 	list.add_theme_constant_override("separation", 6)
@@ -217,6 +231,14 @@ func _build() -> void:
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.modulate = Color(1, 1, 1, 0.6)
 	vb.add_child(hint)
+
+	# Contextual gate hint (hand-crafting only): tells the player tools/armor need a Crafting Table.
+	_gate_hint = Label.new()
+	_gate_hint.add_theme_font_size_override("font_size", 13)
+	_gate_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_gate_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_gate_hint.modulate = Color(0.95, 0.82, 0.55, 0.85)   # soft amber
+	vb.add_child(_gate_hint)
 
 	_toast = Label.new()
 	_toast.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -450,6 +472,8 @@ func open_for(ctx: String) -> void:
 	_context = ctx
 	open = true
 	_panel.visible = true
+	if _recipe_scroll:   # re-fit in case the window was resized while the panel was closed
+		_recipe_scroll.custom_minimum_size.y = _recipe_scroll_cap()
 	_play(_snd_open)
 	_toast.text = ""
 	_set_title()
@@ -469,6 +493,10 @@ func _apply_context() -> void:
 		_cat_sections[cat].header.visible = vis
 		for r in _cat_sections[cat].rows:
 			r.visible = vis
+	# Hand-crafting only shows basics; nudge the player toward a Crafting Table for tools/armor.
+	if _gate_hint:
+		_gate_hint.text = "Tools & armor are crafted at a Crafting Table — craft one (4 Planks), place it, then right-click it." if _context == "hand" else ""
+		_gate_hint.visible = _context == "hand"
 
 ## Called by the pause menu / death so the overlays never stack.
 func close() -> void:

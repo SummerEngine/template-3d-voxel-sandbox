@@ -26,6 +26,11 @@ const ADV := [
 	{"id": "veteran",     "title": "Veteran",        "desc": "Survive three nights.",     "reward": "Sledgehammer"},
 	{"id": "hunter",      "title": "Monster Hunter", "desc": "Defeat 10 hostile mobs.",   "reward": "War Axe"},
 	{"id": "armed",       "title": "Armed",          "desc": "Craft an Iron Sword."},
+	# Long-game rungs so there's something to strive for well past the first week (was: nothing
+	# after 3 nights / 10 kills). Drive off the existing counters — no new signals needed.
+	{"id": "nightbound",  "title": "Nightbound",     "desc": "Survive five nights.",      "reward": "Warhammer"},
+	{"id": "warden",      "title": "Warden",         "desc": "Survive ten nights.",       "reward": "Great Maul"},
+	{"id": "slayer",      "title": "Slayer",         "desc": "Defeat fifty hostile mobs.", "reward": "Flanged Mace"},
 ]
 
 func setup(p) -> void:
@@ -69,7 +74,21 @@ func _met(id: String) -> bool:
 		"veteran":    return _stats.nights >= 3
 		"hunter":     return _stats.mobs >= 10
 		"armed":      return player.owns_tool("Iron Sword")
+		"nightbound": return _stats.nights >= 5
+		"warden":     return _stats.nights >= 10
+		"slayer":     return _stats.mobs >= 50
 	return false
+
+## The next unearned goal's short instruction (drives the HUD objective line). "" once all done.
+func next_goal() -> String:
+	for a in ADV:
+		if not _done.has(a.id):
+			return a.desc
+	return ""
+
+func _push_objective() -> void:
+	if player and player.hud and player.hud.has_method("set_objective"):
+		player.hud.set_objective(next_goal())
 
 func _check_all() -> void:
 	if player == null:
@@ -80,6 +99,7 @@ func _check_all() -> void:
 		if _met(a.id):
 			_done[a.id] = true
 			_grant(a)
+	_push_objective()   # keep the HUD's persistent "current goal" line in sync
 
 func _grant(a: Dictionary) -> void:
 	if _snd_adv and _snd_adv.stream:

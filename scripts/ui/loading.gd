@@ -7,10 +7,13 @@ extends Control
 
 const NEXT_SCENE := "res://main.tscn"
 const BG_PATH := "res://assets/textures/menu/background.png"
-const MIN_TIME := 4.0                       # keep the screen up at least this long (perceived load)
+const MIN_TIME := 2.5                       # keep the screen up ~2.5s (perceived load); stays above the 2.4s tip rotation so a full tip is always shown
 const BAR_W := 480.0
 const HEAVY_EXT := [".glb", ".mp3", ".ogg"]   # models + audio (the cold loads that hitch on spawn);
                                               # textures are pulled in by the GLBs that use them
+# Dead fallback models: kept on disk so "dead-but-available" fallback code still resolves, but NOT
+# warm-loaded here (they're never actually instantiated and cost ~90 MB of startup load time).
+const SKIP := ["animated_zombie.glb", "zombie_rigged.glb", "fp_arm.glb", "player.glb", "player_animated.glb", "player_rigged.glb", "explorer_bot.glb", "world_model.glb"]
 const TIPS := [
 	"Double-tap Space to toggle creative flight.",
 	"Mine grass for seeds — till soil with a hoe and grow wheat.",
@@ -144,6 +147,10 @@ func _gather(dir_path: String) -> void:
 				_gather(dir_path.path_join(n))
 		else:
 			var low := n.to_lower()
+			# Skip dead fallback models: still on disk for fallback code, but not worth warm-loading.
+			if low in SKIP:
+				n = da.get_next()
+				continue
 			for ext in HEAVY_EXT:
 				if low.ends_with(ext):
 					_paths.append(dir_path.path_join(n))

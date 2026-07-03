@@ -50,6 +50,7 @@ var _blood_vig: TextureRect      # pulsing red edge-vignette during a blood moon
 var _blood_on := false
 var _blood_phase := 0.0
 var _time_label: Label           # persistent "Day N" / "Night N" readout
+var _objective: Label            # persistent "current goal" line (fed by advancements.next_goal)
 
 func _ready() -> void:
 	layer = 5
@@ -115,11 +116,15 @@ func _toggle_controls() -> void:
 func auto_retire_controls() -> void:
 	if _controls == null:
 		return
-	get_tree().create_timer(13.0).timeout.connect(_retire_controls)
+	get_tree().create_timer(25.0).timeout.connect(_retire_controls)   # outlive the welcome toasts + mouse-settling window
 
 func _retire_controls() -> void:
 	if _controls == null or not _controls.visible:
 		return                                    # already hidden (player pressed H) — leave it
+	# Don't vanish mid-read while a menu is open (mouse freed) — wait and try again shortly.
+	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		get_tree().create_timer(5.0).timeout.connect(_retire_controls)
+		return
 	var tw := create_tween()
 	tw.tween_property(_controls, "modulate:a", 0.0, 1.2)
 	tw.tween_callback(func() -> void:
@@ -283,6 +288,17 @@ func _build() -> void:
 	_outline(_time_label)
 	add_child(_time_label)
 
+	# Persistent objective line so a lost player always has a "what next" prompt (the two welcome
+	# toasts fade in ~5s). Auto-advances through the advancement chain via set_objective().
+	_objective = Label.new()
+	_objective.position = Vector2(16, 146)
+	_objective.add_theme_font_size_override("font_size", 14)
+	_objective.modulate = Color(0.82, 0.9, 1.0)
+	_objective.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_objective.custom_minimum_size = Vector2(300, 0)
+	_outline(_objective)
+	add_child(_objective)
+
 	_block_name = Label.new()
 	_block_name.add_theme_font_size_override("font_size", 18)
 	_block_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -338,7 +354,7 @@ func _build() -> void:
 	_fps = Label.new()
 	_fps.add_theme_font_size_override("font_size", 16)
 	_fps.modulate = Color(0.7, 1.0, 0.7)
-	_fps.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_fps.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT   # left column, below Day/Night — was drawn over the minimap
 	_fps.visible = false
 	_outline(_fps, 3)
 	add_child(_fps)
@@ -504,8 +520,8 @@ func _layout() -> void:
 	_block_name.size = Vector2(200, 20)
 	_center_controls()
 	if _fps:
-		_fps.size = Vector2(240, 40)
-		_fps.position = Vector2(vp.x - 256, 12)
+		_fps.size = Vector2(240, 60)
+		_fps.position = Vector2(16, 180)   # left column under Day/Night + objective — clear of the top-right minimap
 	if _toast:
 		_toast.size = Vector2(vp.x, 28)
 		_toast.position = Vector2(0, vp.y * 0.5 - 70)
@@ -518,6 +534,13 @@ func _layout() -> void:
 		_death_sub.size = Vector2(vp.x, 56)                 # two lines (run stat + respawn hint)
 		_death_sub.position = Vector2(0, vp.y * 0.5 - 52)
 		_respawn_btn.position = Vector2(vp.x * 0.5 - 110, vp.y * 0.5 + 10)
+
+## Persistent "current goal" line, fed by advancements as goals complete. Empty text hides it.
+func set_objective(text: String) -> void:
+	if _objective == null:
+		return
+	_objective.text = ("Goal: " + text) if text != "" else ""
+	_objective.visible = text != ""
 
 ## A brief fading message in the centre of the screen.
 func show_toast(text: String, color: Color = Color(1, 0.9, 0.7)) -> void:

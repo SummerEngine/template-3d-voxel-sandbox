@@ -24,6 +24,7 @@ const BLOOD_HORIZON := Color(0.50, 0.08, 0.06)
 
 var time_of_day := 0.30         # 0..1 (0.25 = noon, 0.75 = midnight)
 var blood_moon := false         # set by main.gd on siege nights — washes the night sky red
+var last_blood := false         # latched at dawn BEFORE blood_moon clears, so post-night consumers (chronicle) still see it
 var _sun: DirectionalLight3D
 var _env: Environment
 var _sky: ShaderMaterial
@@ -57,8 +58,11 @@ func _apply() -> void:
 	var glow: float = clampf(1.0 - absf(elev) * 3.0, 0.0, 1.0)   # peaks at dawn/dusk (shared with the sky below)
 	_sun.light_energy = maxf(lerpf(0.04, 1.45, daylight), 0.32 * blood)   # eerie red moonlight
 	# Golden hour: warm the DIRECT light at dawn/dusk to match the sky/fog glow (blood stays last
-	# so siege nights land on BLOOD_SUN regardless).
-	_sun.light_color = NIGHT_SUN.lerp(DAY_SUN, daylight).lerp(Color(1.0, 0.62, 0.30), glow * 0.55).lerp(BLOOD_SUN, blood)
+	# so siege nights land on BLOOD_SUN regardless). Unlike the sky's symmetric glow, the SUN tint is
+	# gated to the DAY side of the horizon — otherwise the warm cast bleeds onto the moonlight just
+	# after sunset / before sunrise (elev<0) and night opens orange instead of cold NIGHT_SUN.
+	var sun_glow: float = glow * clampf(elev * 8.0 + 0.5, 0.0, 1.0)
+	_sun.light_color = NIGHT_SUN.lerp(DAY_SUN, daylight).lerp(Color(1.0, 0.62, 0.30), sun_glow * 0.55).lerp(BLOOD_SUN, blood)
 	# Always on so shadows fade smoothly with the sun's energy at dawn/dusk instead of popping at a
 	# threshold; near-zero night energy (~0.04) makes them imperceptible.
 	_sun.shadow_enabled = true

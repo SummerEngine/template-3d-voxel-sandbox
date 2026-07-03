@@ -358,9 +358,11 @@ func _setup_model() -> void:
 
 ## Earn-your-gear: you begin owning only a Wooden Pickaxe (equipped) + Bare Hands.
 ## Everything else is crafted (tiered tools/swords) or unlocked via advancements.
+## Pickaxe FIRST so weapon_holder.setup() equips it at index 0 — it starts the mine->craft
+## ladder at the bottom (the Heavy Maul is the end-of-ladder "Fully Geared" advancement reward).
 func _starter_tools() -> Array:
 	var out: Array = []
-	for n in ["Heavy Maul"]:
+	for n in ["Wooden Pickaxe", "Bare Hands"]:
 		var w := WeaponRegistry.by_name(n)
 		if not w.is_empty():
 			out.append(w)
@@ -489,6 +491,22 @@ func set_sensitivity(mult: float) -> void:
 ## camera.fov lerps toward the target every frame, so a live slider change eases in.
 func set_fov(v: float) -> void:
 	base_fov = clampf(v, 60.0, 110.0)
+
+## Creative flight toggle (double-tap Space or F). Toasts the new state so a new player who
+## triggered it by accident can see what happened and how to move — flying silently was a
+## frequent "why am I floating / why did I fall on respawn" trap.
+func _toggle_fly() -> void:
+	flying = not flying
+	if flying:
+		velocity = Vector3.ZERO
+	if hud:
+		if hud.has_method("show_toast"):
+			if flying:
+				hud.show_toast("Creative flight ON — Space up, Ctrl down (double-tap Space to land)", Color(0.7, 0.9, 1.0))
+			else:
+				hud.show_toast("Flight OFF", Color(0.85, 0.9, 1.0))
+		if hud.has_method("tick_select"):
+			hud.tick_select()
 
 # --- pooled one-shot particle bursts -------------------------------------------------
 # One BoxMesh + one material are shared by every burst; per-burst tint rides the particle
@@ -721,30 +739,32 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.is_action_pressed("jump"):
 			var now := Time.get_ticks_msec()
 			if now - _last_space_ms < DOUBLE_TAP_MS:
-				flying = not flying
-				if flying: velocity = Vector3.ZERO
+				_toggle_fly()
 			_last_space_ms = now
 			return
 		match event.keycode:
 			KEY_F:
-				flying = not flying
-				if flying: velocity = Vector3.ZERO
+				_toggle_fly()
 			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9:
 				_select(event.keycode - KEY_1)
 			KEY_Q:
 				if weapon_holder:
 					var b := String(weapon_holder.current().get("name", ""))
 					weapon_holder.prev()
-					if hud and hud.has_method("tick_select") and String(weapon_holder.current().get("name", "")) != b:
-						hud.tick_select()    # click only when the weapon actually changed (silent on a 1-weapon no-op)
+					if String(weapon_holder.current().get("name", "")) != b:
+						if hud and hud.has_method("tick_select"):
+							hud.tick_select()    # click only when the weapon actually changed (silent on a 1-weapon no-op)
+						_vm_place = 1.0          # small forward settle so a weapon swap is not a hard pop-in
 				_build_viewmodel()
 				_update_hud()
 			KEY_E:
 				if weapon_holder:
 					var b := String(weapon_holder.current().get("name", ""))
 					weapon_holder.next()
-					if hud and hud.has_method("tick_select") and String(weapon_holder.current().get("name", "")) != b:
-						hud.tick_select()
+					if String(weapon_holder.current().get("name", "")) != b:
+						if hud and hud.has_method("tick_select"):
+							hud.tick_select()
+						_vm_place = 1.0          # small forward settle so a weapon swap is not a hard pop-in
 				_build_viewmodel()
 				_update_hud()
 			KEY_G:
@@ -1554,6 +1574,12 @@ func _break_block(cell: Vector3i, id: int) -> void:
 	add_trauma(0.1)                        # subtle pop when a block breaks
 	get_tree().call_group("ducker", "duck", 0.22, 0.35)
 	world_manager.set_block(cell.x, cell.y, cell.z, VoxelTypes.AIR)
+	# A torch sitting on the block we just mined would hang in mid-air (and re-persist there on
+	# save). Retrieve it as an item instead of orphaning it. Scoped to player mining only, so
+	# non-player edits (collapses, world-gen) never dump phantom torches into the bag.
+	var _torch_above := cell + Vector3i(0, 1, 0)
+	if world_manager.has_torch(_torch_above) and world_manager.remove_torch(_torch_above):
+		give_or_drop(VoxelTypes.TORCH, 1)
 	if farm:
 		farm.on_block_removed(cell)        # clear a crop sitting here / above broken farmland
 	# Tier gate: too weak a pickaxe still breaks the block but yields no drop. (The warning is
@@ -2021,6 +2047,7 @@ func apply_save(p: Dictionary) -> void:
 		var valid := is_finite(sx) and is_finite(sy) and is_finite(sz)
 		if world_manager:
 			var buried := false
+			var floating := false
 			if valid:
 				var fy := floori(sy)
 				var hy := floori(sy + 1.7)   # head cell, inside the 1.8-tall cylinder
@@ -2030,7 +2057,15 @@ func apply_save(p: Dictionary) -> void:
 				var hb: int = world_manager.get_block(fx, hy, fz)
 				buried = (VoxelTypes.is_solid(fb) and fb != VoxelTypes.WATER) \
 					or (VoxelTypes.is_solid(hb) and hb != VoxelTypes.WATER)
-			if valid and not buried:
+				# ...and the OPPOSITE failure: a saved position hovering far ABOVE the real ground —
+				# a save made while flying, or a legacy sky-Y baked into an old save — would otherwise
+				# reload you in the sky. solid_top_y is edit-aware and works pre-stream, so if the feet
+				# sit >5 blocks above the true standable top with nothing but air below, re-ground it.
+				# (A build/tower/peak the player stands ON reads as solid_top_y ~= feet, so it's kept.)
+				if world_manager.has_method("solid_top_y"):
+					var ground_top: int = world_manager.solid_top_y(fx, fz)
+					floating = sy - float(ground_top) > 5.0
+			if valid and not buried and not floating:
 				global_position = Vector3(sx, sy, sz)
 			else:
 				global_position = _ground_at(sx if valid else 0.5, sz if valid else 0.5)

@@ -171,14 +171,27 @@ func _update_imposter(delta: float) -> void:
 ## A real mirage commits: a little stone-brick obelisk + a loot chest stamp into the world exactly
 ## where the lie stood. The eerie note + toast teach that the audio tell means "this one is real".
 func _commit() -> void:
-	_committed = true
 	var ix := floori(_imp.global_position.x)
 	var iz := floori(_imp.global_position.z)
 	var iy := world.surface_height(ix, iz)
+	var cc := Vector3i(ix + 1, iy + 1, iz)
+	# Never stamp over the player's work: if any obelisk/chest cell is a player edit, or the chest
+	# spot is occupied / already a chest, abandon — the "real" mirage simply melts like a fake
+	# instead of bulldozing a build or hijacking existing storage.
+	for hgt in range(4):
+		if world.overrides.has(Vector3i(ix, iy + 1 + hgt, iz)):
+			_dispel()
+			return
+	if world.overrides.has(Vector3i(ix, iy + 5, iz)) or world.overrides.has(cc):
+		_dispel()
+		return
+	if world.get_block(cc.x, cc.y, cc.z) != VoxelTypes.AIR or world.chests.has(cc):
+		_dispel()
+		return
+	_committed = true
 	for hgt in range(4):
 		world.set_block(ix, iy + 1 + hgt, iz, VoxelTypes.STONE_BRICKS)
 	world.set_block(ix, iy + 5, iz, VoxelTypes.POLISHED_STONE)
-	var cc := Vector3i(ix + 1, iy + 1, iz)
 	world.set_block(cc.x, cc.y, cc.z, VoxelTypes.CHEST)
 	var inv = world.chest_at(cc)
 	inv.add(VoxelTypes.DIAMOND, 1)
