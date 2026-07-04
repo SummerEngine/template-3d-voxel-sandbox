@@ -6,6 +6,8 @@ render_mode unshaded, cull_back, depth_draw_never;
 // `progress` uniform climbs 0 -> 1. Triplanar world coords keep the cracks aligned on
 // every face without needing per-face UVs.
 uniform float progress = 0.0;
+uniform vec3 crack_color = vec3(0.0);   // base crack tint: black normally, red when the pickaxe is too weak
+uniform float alpha_mul = 1.0;          // break-pop fade multiplier driven by a tween (1.0 = normal mining)
 
 varying vec3 v_world;
 varying vec3 v_wnorm;
@@ -50,6 +52,11 @@ void fragment() {
 	float crack = 1.0 - smoothstep(0.0, w, edge);
 	crack *= smoothstep(0.02, 0.18, progress);              // fade in once mining actually starts
 
-	ALBEDO = vec3(0.0);
-	ALPHA = crack * 0.8;
+	// Colour ramp: normal cracks heat from dark toward a warm ember in the final ~40% (a clear
+	// "one more hit" read); a red crack_color (too-weak pickaxe) is kept red throughout so
+	// "you're wasting this block" stays legible instead of turning into a reward-ember.
+	float hot = smoothstep(0.6, 1.0, progress);
+	bool weak = crack_color.r > 0.2;
+	ALBEDO = weak ? crack_color : mix(crack_color, vec3(0.5, 0.14, 0.03), hot);
+	ALPHA = crack * (0.8 + hot * 0.15) * alpha_mul;   // slightly more opaque near break; alpha_mul drives the break pop
 }

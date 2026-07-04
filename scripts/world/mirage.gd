@@ -30,6 +30,7 @@ var _cd := 10.0
 var _check := 0.0
 var _real := false
 var _committed := false
+var _committed_once := false
 var _snd: AudioStreamPlayer
 
 func setup(w, p, dn, wx) -> void:
@@ -199,7 +200,14 @@ func _commit() -> void:
 	inv.add(VoxelTypes.COOKED_MEAT, 3)
 	_eerie()
 	if player and player.hud and player.hud.has_method("show_toast"):
-		player.hud.show_toast("A Waking Dream — not every mirage lies.", Color(0.78, 0.9, 1.0))
+		if not _committed_once:
+			_committed_once = true
+			player.hud.show_toast("A Waking Dream — not every mirage lies.", Color(0.78, 0.9, 1.0))
+		else:
+			player.hud.show_toast("The dream held true — a cache remains.", Color(0.78, 0.9, 1.0))
+	# Gold shimmer rising out of the haze so the loot's arrival is unmistakable.
+	if player and is_instance_valid(player) and player.has_method("_emit_burst"):
+		player._emit_burst(Vector3(cc.x + 0.5, cc.y + 0.5, cc.z + 0.5), Color(1.0, 0.85, 0.4), 24, 1.1, 0.4, 0.6, 1.6, 1.2)
 	_free_imp()
 	_cd = COOLDOWN * 1.5
 

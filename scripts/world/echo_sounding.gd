@@ -68,6 +68,9 @@ func _ping() -> void:
 	var colors: Array = []
 	var r2 := RADIUS * RADIUS
 	var budget := 6200                                # hard backstop on per-ping read work
+	var best_a := 0.0                                 # strongest (non-lava) signal, for the readout
+	var best_id := -1
+	var best_cell := Vector3.ZERO
 	# Column-outer / y-inner: surface_height is sampled ONCE per (x,z) and reused down the column
 	# (was recomputed per cell via get_block). Override-aware read keeps results identical to get_block.
 	for dz in range(-RADIUS, RADIUS + 1):
@@ -101,6 +104,10 @@ func _ping() -> void:
 				var a := dterm * (1.0 / (1.0 + muffle * 0.45))
 				if a < 0.06:
 					continue
+				if id != VoxelTypes.LAVA and a > best_a:
+					best_a = a
+					best_id = id
+					best_cell = c
 				var col := VoxelTypes.color_of(id)
 				if id == VoxelTypes.LAVA:
 					col = Color(1.0, 0.3, 0.1)
@@ -118,9 +125,17 @@ func _ping() -> void:
 			player.hud.show_toast("The resonance fades into dead rock.", Color(0.6, 0.7, 0.75))
 		return
 	mm.instance_count = xforms.size()
+	var intro_shown := false
 	if not _explained and player.hud and player.hud.has_method("show_toast"):
 		_explained = true
+		intro_shown = true
 		player.hud.show_toast("Echo-sounding: %d signals — brighter = closer, red = lava." % xforms.size(), Color(0.55, 0.85, 0.95))
+	# Surface the strongest read (type + rough bearing) so the deduction loop is legible.
+	if best_id != -1 and player.hud and player.hud.has_method("show_toast"):
+		if intro_shown:
+			get_tree().create_timer(1.4).timeout.connect(_signal_readout.bind(best_id, best_cell, best_a))
+		else:
+			_signal_readout(best_id, best_cell, best_a)
 	for i in range(xforms.size()):
 		mm.set_instance_transform(i, xforms[i])
 		mm.set_instance_color(i, colors[i])
@@ -156,3 +171,20 @@ func _solid_between(from: Vector3, to: Vector3) -> int:
 		if b != VoxelTypes.AIR and b != VoxelTypes.WATER and not _is_signal_block(b):
 			solid += 1
 	return solid
+
+## Announce the strongest (non-lava) signal: its type, strength, and rough compass bearing.
+func _signal_readout(best_id: int, best_cell: Vector3, best_a: float) -> void:
+	if best_id == -1 or player == null or not is_instance_valid(player):
+		return
+	if not (player.hud and player.hud.has_method("show_toast")):
+		return
+	var dvec := best_cell - player.global_position
+	var ang := atan2(dvec.x, -dvec.z)             # Godot: -Z is forward/north
+	var dirs := ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+	var compass: String = dirs[int(round(ang / (PI / 4.0))) & 7]
+	var strength := "faint"
+	if best_a >= 0.6:
+		strength = "strong"
+	elif best_a >= 0.3:
+		strength = "clear"
+	player.hud.show_toast("Strongest: %s, %s — to the %s." % [VoxelTypes.name_of(best_id), strength, compass], VoxelTypes.color_of(best_id))

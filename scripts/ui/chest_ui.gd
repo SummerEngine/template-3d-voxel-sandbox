@@ -72,10 +72,23 @@ func _build() -> void:
 	lbl.modulate = Color(0.75, 0.82, 0.95)
 	vb.add_child(lbl)
 	vb.add_child(_grid(_inv_slots, "inv"))
+	# Bulk-transfer + Close row: emptying/looting a chest was up to 27 clicks each way.
+	var btn_row := HBoxContainer.new()
+	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	btn_row.add_theme_constant_override("separation", 10)
+	var deposit_btn := UITheme.make_button("Deposit All", "normal", Vector2(140, 40))
+	deposit_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	deposit_btn.pressed.connect(_deposit_all)
+	btn_row.add_child(deposit_btn)
+	var take_btn := UITheme.make_button("Take All", "normal", Vector2(140, 40))
+	take_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	take_btn.pressed.connect(_take_all)
+	btn_row.add_child(take_btn)
 	var close_btn := UITheme.make_button("Close", "normal", Vector2(140, 40))
 	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	close_btn.pressed.connect(close)
-	vb.add_child(close_btn)
+	btn_row.add_child(close_btn)
+	vb.add_child(btn_row)
 	var hint := Label.new()
 	hint.text = "Click a stack to move it between chest and inventory"
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -156,6 +169,7 @@ func _on_slot(which: String, i: int) -> void:
 	var dst = _chest if which == "inv" else player.inventory
 	var s = src[i]
 	if s.count <= 0:
+		if _toast: _toast.text = ""   # dismiss a stale "That side is full" on an empty-slot click
 		return
 	var left: int = dst.add(s.id, s.count)
 	var moved: int = s.count - left
@@ -164,6 +178,39 @@ func _on_slot(which: String, i: int) -> void:
 		s.id = VoxelTypes.AIR
 	if _toast:                       # explain a blocked/partial move (the click otherwise looks dead)
 		_toast.text = "That side is full" if moved == 0 else ("Moved %d (rest didn't fit)" % moved if left > 0 else "")
+	_play()
+	if player.has_method("on_inventory_changed"):
+		player.on_inventory_changed()
+	_refresh()
+
+## Move every stack from the player's inventory into the chest.
+func _deposit_all() -> void:
+	if _chest == null or player == null:
+		return
+	_bulk_move(player.inventory.slots, _chest, "Deposited")
+
+## Move every stack from the chest into the player's inventory.
+func _take_all() -> void:
+	if _chest == null or player == null:
+		return
+	_bulk_move(_chest.slots, player.inventory, "Took")
+
+## Shared bulk mover: for each non-empty slot in src, add as much as fits into dst,
+## clearing emptied source slots. src/dst are distinct Inventory arrays so iterating
+## src while add() mutates dst is safe. Same per-slot data path as _on_slot.
+func _bulk_move(src: Array, dst, verb: String) -> void:
+	var total := 0
+	for s in src:
+		if s.count <= 0:
+			continue
+		var left: int = dst.add(s.id, s.count)
+		var moved: int = s.count - left
+		s.count -= moved
+		total += moved
+		if s.count <= 0:
+			s.id = VoxelTypes.AIR
+	if _toast:
+		_toast.text = ("%s %d" % [verb, total]) if total > 0 else "Nothing fit — that side is full"
 	_play()
 	if player.has_method("on_inventory_changed"):
 		player.on_inventory_changed()

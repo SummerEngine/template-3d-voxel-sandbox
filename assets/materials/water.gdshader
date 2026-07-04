@@ -21,8 +21,13 @@ void vertex() {
 void fragment() {
 	vec2 local = clamp(fract(v_uv), INSET, 1.0 - INSET);
 	vec2 uv = v_tile + local * TILE;
-	ALBEDO    = texture(atlas, uv).rgb;
-	ALPHA     = 0.6;     // translucent — see the bottom
-	ROUGHNESS = 0.1;     // glossy water sheen
+	ALBEDO = texture(atlas, uv).rgb;
+	// Fresnel: water is near-clear looking straight down and brightens to a reflective sheet at
+	// grazing angles. Modulates alpha (see-the-bottom overhead, opaque toward the horizon) and a
+	// cool rim glow — the single biggest missing water "feel" cue. Fragment-only; no cull change.
+	float fres = pow(1.0 - clamp(dot(normalize(VIEW), normalize(NORMAL)), 0.0, 1.0), 4.0);
+	ALBEDO += fres * 0.25 * vec3(0.6, 0.75, 0.9);   // grazing-angle rim glow
+	ALPHA     = mix(0.5, 0.92, fres);               // clear overhead, brighter/denser at the horizon
+	ROUGHNESS = mix(0.1, 0.02, fres);               // a touch glossier at grazing
 	METALLIC  = 0.0;
 }

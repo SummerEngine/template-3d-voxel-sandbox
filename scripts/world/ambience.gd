@@ -112,24 +112,36 @@ func _process(delta: float) -> void:
 	if player == null or not is_instance_valid(player) or day_night == null:
 		return
 	var night: bool = day_night.is_night()
-	var pos: Vector3 = player.global_position
-	_fireflies.global_position = pos + Vector3(0.0, 2.5, 0.0)
-	_pollen.global_position = pos + Vector3(0.0, 3.0, 0.0)
 	# Suppress motes when the player is underground/under cover or submerged (no sunbeam pollen in
 	# a cave, no dry dust underwater) — the player computes this on a throttle.
 	var blocked: bool = _has_atmo and player.atmosphere_blocked()
-	_fireflies.emitting = night and not blocked
-	_pollen.emitting = (not night) and not blocked
+	var fire_on: bool = night and not blocked
+	var pollen_on: bool = (not night) and not blocked
+	var pos: Vector3 = player.global_position
+	# Only reposition an emitter that is actually emitting (its origin is refreshed on the exact
+	# frame it turns on) — no wasted transform writes on the idle/off emitter.
+	if fire_on:
+		_fireflies.global_position = pos + Vector3(0.0, 2.5, 0.0)
+	if pollen_on:
+		_pollen.global_position = pos + Vector3(0.0, 3.0, 0.0)
+	_fireflies.emitting = fire_on
+	_pollen.emitting = pollen_on
 	# Crossfade the night ambience bed (audible only at night, and not while underground/submerged).
+	# Skip the write once the fade has settled so we don't marshal a no-op volume write every frame.
 	if _night_bed and _night_bed.stream:
-		var want := -20.0 if (night and not blocked) else -80.0
-		_night_bed.volume_db = move_toward(_night_bed.volume_db, want, delta * 30.0)
+		var want := -15.0 if fire_on else -80.0
+		if not is_equal_approx(_night_bed.volume_db, want):
+			_night_bed.volume_db = move_toward(_night_bed.volume_db, want, delta * 30.0)
 	# Crossfade the gameplay music: peaceful by day, tense by night (plays underground too — music,
 	# unlike the ambience bed, isn't gated on cover).
 	if _music_day and _music_day.stream:
-		_music_day.volume_db = move_toward(_music_day.volume_db, -80.0 if night else -16.0, delta * 8.0)
+		var want_day := -80.0 if night else -16.0
+		if not is_equal_approx(_music_day.volume_db, want_day):
+			_music_day.volume_db = move_toward(_music_day.volume_db, want_day, delta * 8.0)
 	if _music_night and _music_night.stream:
-		_music_night.volume_db = move_toward(_music_night.volume_db, -13.0 if night else -80.0, delta * 8.0)
+		var want_night := -13.0 if night else -80.0
+		if not is_equal_approx(_music_night.volume_db, want_night):
+			_music_night.volume_db = move_toward(_music_night.volume_db, want_night, delta * 8.0)
 	if night:
 		_star_t -= delta
 		if _star_t <= 0.0:

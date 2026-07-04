@@ -26,6 +26,9 @@ var _mesh: MeshInstance3D
 # to allocate a fresh BoxMesh + StandardMaterial3D per dropped cube; now it allocates nothing.
 static var _shared_mesh: BoxMesh
 static var _mat_cache: Dictionary = {}   # block_id -> StandardMaterial3D
+# Shared across ALL drops so a bag-full state shows at most one toast per window,
+# not one per resting drop and never per-frame (drops sit near the player for minutes).
+static var _full_toast_t := 0.0
 
 static func _drop_mesh() -> BoxMesh:
 	if _shared_mesh == null:
@@ -109,3 +112,11 @@ func _physics_process(delta: float) -> void:
 						if player.has_method("_emit_burst"):
 							player._emit_burst(global_position, Color(0.95, 0.82, 0.35), 6, 0.35, 70.0, 0.6, 1.6, 3.0)   # warm pickup poof
 						queue_free()        # only despawn if it actually fit; else wait on the ground
+			else:
+				# Bag is full: the drop just rests and would silently despawn — reads as a bug.
+				# Fire a single throttled toast (shared static timer so N resting drops can't spam,
+				# and it never repeats per-frame). Gated to the magnet radius we're already inside.
+				var now := Time.get_ticks_msec() / 1000.0
+				if now - _full_toast_t > 3.0 and player.hud and player.hud.has_method("show_toast"):
+					_full_toast_t = now
+					player.hud.show_toast("Inventory full — make room to pick this up", Color(1, 0.8, 0.5))

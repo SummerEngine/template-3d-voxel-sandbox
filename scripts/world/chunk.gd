@@ -72,7 +72,9 @@ var manager                      # ChunkManager
 var coord: Vector2i
 var _mesh_instance: MeshInstance3D
 var _body: StaticBody3D
+var _col_shape: CollisionShape3D   # kept alongside _body so edit rebuilds swap the shape in place, not free+recreate the nodes
 var _col_height: PackedInt32Array = PackedInt32Array()  # packed per-column surface heights (chunk + 1-voxel border), index (lz+1)*_sx+(lx+1)
+var _col_max_y := 0            # tallest surface height in _col_height, cached with it (both are pure fns of x/z — edit-independent)
 
 # Per-build voxel cache: every block (incl. a 1-voxel border, edits and trees) is
 # computed ONCE here, then the greedy mesher reads this flat array instead of
@@ -90,6 +92,7 @@ var _built_shape: ConcavePolygonShape3D        # trimesh collider, built in _pre
 var _water_arrays: Array = []                  # water mesh surface (separate, translucent)
 var _tree_sites: Array = []                    # [{lx,lz,sc,kind,rot,h}] -> per-chunk 3D-tree MultiMesh
 var _foliage: Node3D                           # holds this chunk's tree/palm MultiMeshInstance3D nodes
+var _foliage_sig := -1                          # signature of the last foliage build (sites + stump-presence bits); skip rebuild when unchanged
 
 # Threaded streaming build: the heavy compute (terrain fill + greedy mesh) runs on a
 # worker thread; the finished mesh + collider are applied on the main thread (capped
@@ -133,8 +136,23 @@ func build() -> void:
 	_dirty = false
 	set_process(false)
 
+## Thread-safe snapshot of ONLY this chunk's edits (its cells + the 1-voxel border ring, matching
+## _fill_cache's test at line ~345) instead of duplicating the ENTIRE world overrides dict every
+## rebuild. A player with thousands of edits used to copy them all on every mine; now the worker
+## gets a small dict, so the copy AND the worker's per-key overlay/max_y loops both shrink.
+func _snapshot_overrides() -> Dictionary:
+	var snap := {}
+	var ox := coord.x * CW
+	var oz := coord.y * CD
+	for key in manager.overrides.keys():
+		var lx: int = key.x - ox
+		var lz: int = key.z - oz
+		if lx >= -1 and lx <= CW and lz >= -1 and lz <= CD:
+			snap[key] = manager.overrides[key]
+	return snap
+
 func start_async() -> void:
-	_overrides_snapshot = manager.overrides.duplicate()      # snapshot for a thread-safe read
+	_overrides_snapshot = _snapshot_overrides()      # snapshot for a thread-safe read
 	_build_ready = false
 	_applied = false
 	set_process(true)
@@ -150,7 +168,7 @@ func rebuild_async() -> void:
 		return
 	_dirty = false
 	_rebuilding = true                                       # keep current geometry until the new build lands
-	_overrides_snapshot = manager.overrides.duplicate()
+	_overrides_snapshot = _snapshot_overrides()
 	set_process(true)
 	_task_id = WorkerThreadPool.add_task(_thread_build)
 
@@ -188,15 +206,20 @@ func _prepare(overrides_src: Dictionary) -> Array:
 	var oz := coord.y * CD
 	# Surface heights for this chunk's columns (+1 border ring) and the tallest point we
 	# must mesh up to (covers terrain and any tall edits).
+	# surface_height is a PURE function of (x,z) with a fixed seed — edits land in overrides, never
+	# in terrain height — so _col_height (and its max) are byte-identical across every rebuild of
+	# THIS chunk. Fill it (and _col_max_y) only on the FIRST build; every later mine reuses it,
+	# skipping ~2500 noise samples per edit on the worker. The size!=0 check is the first-build gate.
 	if _col_height.size() != _sz * _sx:
 		_col_height.resize(_sz * _sx)
-	var max_y := 0
-	for lz in range(-1, CD + 1):
-		for lx in range(-1, CW + 1):
-			var s: int = manager.surface_height(ox + lx, oz + lz)
-			_col_height[(lz + 1) * _sx + (lx + 1)] = s
-			if s > max_y:
-				max_y = s
+		_col_max_y = 0
+		for lz in range(-1, CD + 1):
+			for lx in range(-1, CW + 1):
+				var s: int = manager.surface_height(ox + lx, oz + lz)
+				_col_height[(lz + 1) * _sx + (lx + 1)] = s
+				if s > _col_max_y:
+					_col_max_y = s
+	var max_y := _col_max_y
 	for key in overrides_src.keys():
 		if manager.chunk_x(key.x) == coord.x and manager.chunk_z(key.z) == coord.y:
 			if key.y > max_y:
@@ -218,15 +241,22 @@ func _prepare(overrides_src: Dictionary) -> Array:
 		_built_shape = shape
 	return arrays
 
-## Main-thread scene mutation: swap in the new mesh + collider built from `arrays`.
+## Main-thread scene mutation: swap in the new mesh + collider built from `arrays`. REUSES the
+## MeshInstance3D / StaticBody3D / CollisionShape3D nodes across edits (swaps only the mesh + shape
+## RESOURCES) instead of queue_free()ing and recreating them every mine — cuts per-edit node alloc
+## + scene-tree churn during rapid digging. Every state transition is handled explicitly so a
+## chunk going non-empty -> empty (e.g. fully mined out) drops its stale mesh/collider (no phantom
+## blocks or invisible walls).
 func _apply(arrays: Array) -> void:
-	if _mesh_instance and is_instance_valid(_mesh_instance):
-		_mesh_instance.queue_free()
-		_mesh_instance = null
-	if _body and is_instance_valid(_body):
-		_body.queue_free()
-		_body = null
 	if arrays.is_empty() and _water_arrays.is_empty():
+		# Now empty: drop any stale mesh + collider from a previous build.
+		if _mesh_instance and is_instance_valid(_mesh_instance):
+			_mesh_instance.queue_free()
+			_mesh_instance = null
+		if _body and is_instance_valid(_body):
+			_body.queue_free()
+			_body = null
+			_col_shape = null
 		_build_foliage()       # empty terrain -> also drop any trees from a previous build
 		return
 
@@ -247,22 +277,46 @@ func _apply(arrays: Array) -> void:
 		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _water_arrays)
 		am.surface_set_material(surf, water_mat)
 
-	_mesh_instance = MeshInstance3D.new()
-	_mesh_instance.mesh = am
-	add_child(_mesh_instance)
+	# Reuse the mesh node if we have one; only its `mesh` resource changes each build.
+	if _mesh_instance and is_instance_valid(_mesh_instance):
+		_mesh_instance.mesh = am
+	else:
+		_mesh_instance = MeshInstance3D.new()
+		_mesh_instance.mesh = am
+		add_child(_mesh_instance)
 
 	if _built_shape != null:
-		_body = StaticBody3D.new()
-		var cs := CollisionShape3D.new()
-		cs.shape = _built_shape            # trimesh already built in _prepare (off-thread for async)
-		_body.add_child(cs)
-		add_child(_body)
+		# Reuse the body + shape node; only the trimesh `shape` resource changes (built off-thread).
+		if _body and is_instance_valid(_body) and _col_shape:
+			_col_shape.shape = _built_shape
+		else:
+			_body = StaticBody3D.new()
+			_col_shape = CollisionShape3D.new()
+			_col_shape.shape = _built_shape
+			_body.add_child(_col_shape)
+			add_child(_body)
+	elif _body and is_instance_valid(_body):
+		# Had a collider, now none (e.g. only water remains) — drop it so nothing invisible collides.
+		_body.queue_free()
+		_body = null
+		_col_shape = null
 
 	_build_foliage()
 
 ## Rebuild the per-chunk 3D-tree / palm MultiMeshes from _tree_sites, skipping any tree whose
 ## log stump the player has chopped away (so chopping a trunk makes its model vanish).
 func _build_foliage() -> void:
+	# Skip the MultiMesh teardown+rebuild when nothing this function consumes changed — mining a
+	# dirt block far from any tree used to rebuild the whole tree MultiMesh anyway. _tree_sites is
+	# static per chunk, so the only dynamic input is each stump's WOOD-presence bit; fold those (with
+	# the sites) into a signature and bail when it matches the last build.
+	var sig := _tree_sites.size()
+	for site in _tree_sites:
+		var present := 1 if _block(_ox + int(site.lx), int(site.sc) + 1, _oz + int(site.lz)) == VoxelTypes.WOOD else 0
+		sig = ((sig * 131) + int(site.lx) * 7 + int(site.lz) * 13 + int(site.sc) * 17 + int(site.kind) * 3 + present) & 0x3fffffff
+	if sig == _foliage_sig:
+		return                                  # inputs unchanged -> keep the existing foliage (or the existing "none")
+	_foliage_sig = sig
 	if _foliage and is_instance_valid(_foliage):
 		_foliage.queue_free()
 		_foliage = null

@@ -107,7 +107,7 @@ func _ready() -> void:
 ## Positional zombie audio that emanates from the mob's location.
 func _setup_sounds() -> void:
 	_snd_groan = _make_snd3d("res://assets/audio/sfx/mobs/zombie_groan.mp3", -3.0)
-	_snd_attack = _make_snd3d("res://assets/audio/sfx/mobs/zombie_attack.mp3", -1.0)
+	_snd_attack = _make_snd3d("res://assets/audio/sfx/mobs/zombie_attack.mp3", -3.5)   # was -1.0 (hottest SFX in the game); N bites summed over the player's own hurt/swing during a siege
 	_snd_hurt = _make_snd3d("res://assets/audio/sfx/mobs/zombie_hurt.mp3", -2.0)
 	_groan_timer = _rng.randf_range(1.0, 4.0)
 	_voice_pitch = _rng.randf_range(0.82, 1.12)   # this zombie's individual voice register
@@ -292,11 +292,22 @@ static func _shared_eye_mat() -> StandardMaterial3D:
 		_EYE_MAT.emission_energy_multiplier = 1.6
 	return _EYE_MAT
 
+# The rig's box SIZES are a pure function of mob type (normal/brute/runner), so the 8-mesh set is
+# identical across every mob of a given type. Share one BoxMesh per size (like creature.gd's
+# _BIRD_MESH_CACHE) so a 24-mob horde reuses ~24 meshes instead of ~192. Scaling stays on rig.scale
+# (never per-mesh), so a shared BoxMesh is never resized.
+static var _BOX_MESH_CACHE: Dictionary = {}   # Vector3 size -> BoxMesh
+
+static func _box_mesh(size: Vector3) -> BoxMesh:
+	if not _BOX_MESH_CACHE.has(size):
+		var bm := BoxMesh.new()
+		bm.size = size
+		_BOX_MESH_CACHE[size] = bm
+	return _BOX_MESH_CACHE[size]
+
 func _box(parent: Node3D, size: Vector3, pos: Vector3, color: Color) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = size
-	mi.mesh = bm
+	mi.mesh = _box_mesh(size)
 	mi.set_surface_override_material(0, _shared_mat(color))
 	mi.position = pos
 	parent.add_child(mi)
@@ -305,9 +316,7 @@ func _box(parent: Node3D, size: Vector3, pos: Vector3, color: Color) -> MeshInst
 
 func _eye(parent: Node3D, pos: Vector3) -> void:
 	var mi := MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = Vector3(0.10, 0.10, 0.02)
-	mi.mesh = bm
+	mi.mesh = _box_mesh(Vector3(0.10, 0.10, 0.02))
 	mi.set_surface_override_material(0, _shared_eye_mat())
 	mi.position = pos
 	parent.add_child(mi)
@@ -317,9 +326,7 @@ func _limb(parent: Node3D, size: Vector3, joint_pos: Vector3, color: Color) -> N
 	pivot.position = joint_pos
 	parent.add_child(pivot)
 	var mi := MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = size
-	mi.mesh = bm
+	mi.mesh = _box_mesh(size)
 	mi.set_surface_override_material(0, _shared_mat(color))
 	mi.position = Vector3(0, -size.y * 0.5, 0)
 	pivot.add_child(mi)
@@ -386,6 +393,35 @@ func _clear_flash() -> void:
 		if is_instance_valid(m):
 			m.material_override = null
 
+## Shared crumb/ember meshes (with their material baked on) for the death burst and fire VFX, built
+## once for ALL mobs — on a blood-moon dawn the whole surviving horde ignites in one frame, so this
+## drops ~30 BoxMesh + ~30 (emissive) StandardMaterial3D allocations off the dawn frame. Only the
+## per-instance CPUParticles3D still allocates (it must follow/parent to its own moving mob).
+static var _DEATH_MESH: BoxMesh
+static func _death_mesh() -> BoxMesh:
+	if _DEATH_MESH == null:
+		var bm := BoxMesh.new()
+		bm.size = Vector3(0.12, 0.12, 0.12)
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(0.45, 0.10, 0.10)
+		bm.material = mat
+		_DEATH_MESH = bm
+	return _DEATH_MESH
+
+static var _FIRE_MESH: BoxMesh
+static func _fire_mesh() -> BoxMesh:
+	if _FIRE_MESH == null:
+		var bm := BoxMesh.new()
+		bm.size = Vector3(0.11, 0.11, 0.11)
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(1.0, 0.55, 0.12)
+		mat.emission_enabled = true
+		mat.emission = Color(1.0, 0.5, 0.1)
+		mat.emission_energy_multiplier = 2.5
+		bm.material = mat
+		_FIRE_MESH = bm
+	return _FIRE_MESH
+
 ## A burst of dark-red crumbs where the mob fell, parented to the scene so it outlives the
 ## mob's despawn. One-shot create+free — death is rare, so no pooling needed.
 func _death_burst() -> void:
@@ -393,12 +429,7 @@ func _death_burst() -> void:
 	if parent == null:
 		return
 	var p := CPUParticles3D.new()
-	var bm := BoxMesh.new()
-	bm.size = Vector3(0.12, 0.12, 0.12)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.45, 0.10, 0.10)
-	bm.material = mat
-	p.mesh = bm
+	p.mesh = _death_mesh()
 	p.amount = 16
 	p.one_shot = true
 	p.lifetime = 0.7
@@ -446,15 +477,7 @@ func _burn_tick(delta: float) -> void:
 ## Rising orange embers + a wisp of smoke, parented to the mob so the fire follows it.
 func _spawn_fire_vfx() -> void:
 	var p := CPUParticles3D.new()
-	var bm := BoxMesh.new()
-	bm.size = Vector3(0.11, 0.11, 0.11)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(1.0, 0.55, 0.12)
-	mat.emission_enabled = true
-	mat.emission = Color(1.0, 0.5, 0.1)
-	mat.emission_energy_multiplier = 2.5
-	bm.material = mat
-	p.mesh = bm
+	p.mesh = _fire_mesh()
 	p.amount = 20
 	p.lifetime = 0.55
 	p.direction = Vector3.UP

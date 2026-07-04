@@ -16,6 +16,7 @@ const T2 := 22                # lurkers stir
 const T3 := 34                # collapse risk
 const TICK := 2.5
 const COLLAPSE_CD := 26.0
+const MAX_CALMED := 512      # cap the persisted calmed-region dict (like MAX_GRAVES) so long saves stay flat
 const LURKER_CAP := 2
 
 var world: ChunkManager
@@ -73,6 +74,12 @@ func _on_placed(cell: Vector3i, _id: int) -> void:
 			# Pay the calm-the-hollow reward only ONCE per region (persisted) — no dig/refill farm.
 			if not world.hollow_calmed.has(k):
 				world.hollow_calmed[k] = true
+				# Bound this persisted dict so a marathon over-mined save doesn't grow it forever (serialized
+				# in full every save). Evict oldest-inserted; a re-calmed evictee re-pays 1 iron once — fine.
+				if world.hollow_calmed.size() > MAX_CALMED:
+					var _ck: Array = world.hollow_calmed.keys()
+					for _i in range(world.hollow_calmed.size() - MAX_CALMED):
+						world.hollow_calmed.erase(_ck[_i])
 				if player and player.hud and player.hud.has_method("show_toast"):
 					player.hud.show_toast("The dark forgives you.", Color(0.7, 0.95, 0.8))
 				if player and player.has_method("give_or_drop"):
@@ -211,23 +218,7 @@ func _drop_ceiling(cell: Vector3i) -> void:
 	world.hollow_scores[k] = maxi(0, int(world.hollow_scores.get(k, 0)) - 6)
 
 func _dust(pos: Vector3, col: Color, amount: int) -> void:
-	var p := CPUParticles3D.new()
-	var bm := BoxMesh.new()
-	bm.size = Vector3(0.12, 0.12, 0.12)
-	var m := StandardMaterial3D.new()
-	m.albedo_color = col
-	bm.material = m
-	p.mesh = bm
-	p.amount = amount
-	p.one_shot = true
-	p.lifetime = 1.0
-	p.explosiveness = 0.85
-	p.direction = Vector3.DOWN
-	p.spread = 35.0
-	p.initial_velocity_min = 1.0
-	p.initial_velocity_max = 3.0
-	p.gravity = Vector3(0, -6.0, 0)
-	p.global_position = pos
-	add_child(p)
-	p.emitting = true
-	get_tree().create_timer(1.8).timeout.connect(p.queue_free)
+	# Reuse the player's pooled burst (tuned scale-taper + alpha fade) instead of allocating a fresh
+	# CPUParticles3D + BoxMesh + StandardMaterial3D + timer node per collapse/telegraph.
+	if player and player.has_method("_emit_burst"):
+		player._emit_burst(pos, col, amount, 1.0, 35.0, 1.0, 3.0, 6.0, Vector3.DOWN)

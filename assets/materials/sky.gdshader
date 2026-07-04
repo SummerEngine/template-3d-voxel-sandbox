@@ -104,7 +104,13 @@ void sky() {
 		float d = smoothstep(thr, thr + 0.20, n);
 		d *= smoothstep(0.03, 0.17, up);                 // fade into the horizon haze (kept low so clouds read in normal view)
 		float lit = clamp(LIGHT0_ENERGY, 0.05, 1.5);
-		vec3 ccol = mix(vec3(1.0), vec3(0.50, 0.52, 0.58), cloud_cover) * (0.35 + 0.65 * lit);
+		// Tint the clouds with the sun's colour so they catch the golden-hour warmth (day_night turns
+		// LIGHT0_COLOR orange at dawn/dusk) instead of staying stark white over a warm horizon; on a
+		// blood moon the crimson `blood` uniform bleeds in too.
+		vec3 ccol = mix(vec3(1.0), vec3(0.50, 0.52, 0.58), cloud_cover)
+			* (0.35 + 0.65 * lit)
+			* mix(vec3(1.0), LIGHT0_COLOR, 0.6)
+			* mix(vec3(1.0), vec3(1.0, 0.35, 0.25), blood * 0.6);
 		col = mix(col, ccol, d);
 	}
 

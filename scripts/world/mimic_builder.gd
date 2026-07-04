@@ -66,6 +66,11 @@ func _process(delta: float) -> void:
 		if not a.seen and player.global_position.distance_squared_to(a.pos) < DISCOVER_DIST * DISCOVER_DIST:
 			a.seen = true
 			_discovered += 1
+			var first := (_discovered == 1)
+			if player.hud and player.hud.has_method("show_toast"):
+				player.hud.show_toast("Someone has been building here — in your style." if first else "More of its work...", Color(0.75, 0.7, 0.8))
+			if player.has_method("_emit_burst"):
+				player._emit_burst(a.pos + Vector3(0, 0.6, 0), Color(0.75, 0.7, 0.8), 12, 0.8, 40.0, 0.8, 2.0, 3.0)
 	if _cd > 0.0:
 		_cd -= delta
 		return

@@ -92,6 +92,11 @@ var owned_tools: Array = []   # tools/weapons the player has earned (earn-your-g
 var highlight: MeshInstance3D
 var _crack: MeshInstance3D
 var _crack_mat: ShaderMaterial
+var _crack_weak_cell: Vector3i = Vector3i(9999, 9999, 9999)   # last crack-tint target (gate the red weak-tool tint to target changes)
+var _crack_popping := false   # true while the break scale-fade pop is playing on the crack cube
+var _hl_id := -1              # last looked-at block id pushed to the HUD target readout (change-gate)
+var _pickup_streak := 0       # consecutive fast pickups, drives a rising pickup pitch ladder
+var _pickup_streak_t := 0.0   # wall-clock of the last pickup; the ladder resets after a short gap
 
 var _swing_cd := 0.0
 var _hitstop_active := false   # guards overlapping heavy hits from restoring time_scale early
@@ -136,6 +141,13 @@ var _landed_once := false
 var _respawn_grace := 0.0       # secs after a respawn/load where gravity still applies even if the
                                 # feet chunk reads not-ready — so the streaming guard can NEVER pin us
                                 # mid-air (the recurring "respawn in the sky" bug). See _physics_process.
+# Post-respawn GROUND-PIN: for a short window we know the authoritative ground height (pure-fn
+# solid_top_y, no collider needed). If we ever end up airborne well ABOVE it (placed on a thin
+# structure top / collider not registered for apply_floor_snap / far-respawn), snap straight down
+# onto it — so the player lands ON the ground instead of hanging in the sky and falling.
+var _respawn_pin_t := 0.0
+var _respawn_pin_x := 0
+var _respawn_pin_z := 0
 var _air_time := 0.0            # secs continuously off the floor. The airborne (jump/fall) animation
                                 # only plays once this passes a small threshold, so a hair-thin gap
                                 # right after a respawn doesn't read as a "flying" pose on the ground.
@@ -1016,6 +1028,20 @@ func _physics_process(delta: float) -> void:
 		return
 	if _respawn_grace > 0.0:
 		_respawn_grace = maxf(0.0, _respawn_grace - delta)
+	# Post-respawn GROUND-PIN: for a brief window after respawning, if we're airborne well above the
+	# real ground under us (pure-fn solid_top_y — correct even before the chunk collider streams in),
+	# snap straight down onto it. This is the definitive cure for "respawn in the sky then fall":
+	# whatever left us high (a thin structure top the spawn search landed on, or apply_floor_snap
+	# missing a not-yet-registered collider), we land ON the ground within a frame. Never sets flying.
+	if _respawn_pin_t > 0.0:
+		_respawn_pin_t = maxf(0.0, _respawn_pin_t - delta)
+		if not _dead and not is_on_floor() and world_manager and world_manager.has_method("solid_top_y"):
+			var _gt := float(world_manager.solid_top_y(floori(global_position.x), floori(global_position.z))) + 1.05
+			if global_position.y > _gt + 1.5:   # a normal 1-block settle or a jump (~1.2) is left alone
+				global_position.y = _gt
+				velocity = Vector3.ZERO
+				_fall_speed = 0.0
+				_respawn_pin_t = 0.0             # grounded — stop pinning
 	var on_floor := is_on_floor()
 	var in_water := _in_water()   # one terrain-noise eval; reused below (was computed twice)
 	_air_time = 0.0 if (on_floor or in_water) else _air_time + delta   # for the airborne-pose threshold
@@ -1239,12 +1265,21 @@ func _try_farm(tcell: Vector3i, tid: int) -> bool:
 					_spawn_drop(above, VoxelTypes.WHEAT_SEEDS)
 				_play_snd(_break_sound_for(VoxelTypes.GRASS))
 				_emit_burst(Vector3(above) + Vector3(0.5, 0.4, 0.5), Color(0.95, 0.82, 0.35), 12, 0.5, 70.0, 1.2, 2.6, 7.0)
+			else:
+				# Not ready yet — say so instead of a dead-click no-op (mirrors the eat path's anti-silent rule).
+				if hud and hud.has_method("show_toast"):
+					hud.show_toast("Still growing…", Color(0.75, 0.85, 0.6))
+				_play_snd(snd_place, -8.0)   # soft, quieter than a real place tick
 			return true                       # a crop occupies the cell — never place a block here
 		if held == VoxelTypes.WHEAT_SEEDS and held_n > 0:
 			if world_manager.get_block(above.x, above.y, above.z) == VoxelTypes.AIR and not _cell_overlaps_player(above):
 				farm.plant(above)
 				inventory.remove_one(selected)
-				_play_snd(snd_place)
+				# Distinct "planted!" feel — higher-pitched than till/place + a small green sprout puff
+				# + arm swing, so seed-took-root reads apart from re-hitting bare dirt.
+				_play_snd(snd_place, 0.0, 1.15)
+				_emit_burst(Vector3(above) + Vector3(0.5, 0.15, 0.5), VoxelTypes.color_of(VoxelTypes.GRASS), 6, 0.35, 60.0, 0.5, 1.3, 4.0)
+				_vm_place = 1.0
 				on_inventory_changed()
 				return true
 	return false
@@ -1525,19 +1560,28 @@ func _mine_terrain() -> void:
 			mp = float(w.mining_power)
 	var ttb := maxf(0.08, hard / maxf(mp, 0.1))
 	_mine_progress += get_physics_process_delta_time() / ttb
+	var too_weak := VoxelTypes.mine_tier(id) > _pickaxe_tier()   # tool can't harvest — feedback dulls to signal "no drop"
 	if _swing_cd <= 0.0:               # periodic swing feedback while mining
 		_swing_cd = 0.35
 		if mine_anim != "": _mine_timer = 0.45   # > swing interval (0.35) so the looping mine clip plays smoothly, no idle-flicker between swings
-		_play_snd(snd_swing)
+		if too_weak:
+			_play_snd(snd_swing, -3.0, 0.7)   # duller, quieter clink — this swing won't earn a drop
+		else:
+			_play_snd(snd_swing, 0.0, 1.0 + _mine_progress * 0.35)   # pitch rises toward the break, an audible "about to give" ramp
 		_weapon_swing(0.35)
-		_land_squash = maxf(_land_squash, 0.12)   # ~1 cm camera nod per swing — the mining rhythm reads in the view, not just the audio
+		# Nod + chip count scale with hardness so soft dirt taps light and rock lands as a heavy blow.
+		_land_squash = maxf(_land_squash, clampf(0.10 + hard * 0.03, 0.10, 0.22))   # dirt~0.115, stone~0.15, diamond~0.20
 		# Chips fly off the targeted face each swing (previously particles only fired at break time).
 		if ray.is_colliding():
 			var hp := ray.get_collision_point()
 			var n := ray.get_collision_normal()
-			_emit_burst(hp, VoxelTypes.color_of(id), 5, 0.3, 35.0, 1.5, 3.0, 6.0, n)
-			if VoxelTypes.mine_tier(id) >= 1:
-				_emit_burst(hp, Color(1.6, 1.4, 0.7), 4, 0.22, 22.0, 2.0, 4.0, 7.0, n)   # bright sparks bloom on rock/ore
+			if too_weak:
+				_emit_burst(hp, VoxelTypes.color_of(id).lerp(Color(0.4, 0.4, 0.4), 0.7), 2, 0.3, 35.0, 1.5, 3.0, 6.0, n)   # dull, sparse chips — no celebratory sparks
+			else:
+				var chips := clampi(4 + int(hard * 1.5), 4, 10)
+				_emit_burst(hp, VoxelTypes.color_of(id), chips, 0.3, 35.0, 1.5, 3.0, 6.0, n)
+				if VoxelTypes.mine_tier(id) >= 1:
+					_emit_burst(hp, Color(1.6, 1.4, 0.7), 4, 0.22, 22.0, 2.0, 4.0, 7.0, n)   # bright sparks bloom on rock/ore
 	if hud: hud.set_mine_progress(_mine_progress)
 	if _mine_progress >= 1.0:
 		_break_block(cell, id)
@@ -1571,7 +1615,31 @@ func _pickaxe_tier() -> int:
 func _break_block(cell: Vector3i, id: int) -> void:
 	_play_snd(_break_sound_for(id))
 	_spawn_break_particles(Vector3(cell) + Vector3(0.5, 0.5, 0.5), VoxelTypes.color_of(id))
-	add_trauma(0.1)                        # subtle pop when a block breaks
+	# Break impact scales with hardness so finishing a hard block feels earned: bigger shake plus a
+	# debris burst thrown up-and-toward the eye so the break "comes at you" (aim from the camera, not
+	# the feet; bias +Y so shards arc up rather than splattering the near clip plane).
+	var hard := maxf(VoxelTypes.hardness(id), 0.0)
+	var center := Vector3(cell) + Vector3(0.5, 0.5, 0.5)
+	add_trauma(clampf(0.08 + hard * 0.045, 0.08, 0.22))   # soft dirt ~0.10, diamond ~0.22
+	var eye := (camera.global_position if camera else global_position + Vector3(0, 1.6, 0))
+	var to_cam := eye - center
+	var bdir := (to_cam.normalized() + Vector3(0, 0.6, 0)).normalized() if to_cam.length() > 0.01 else Vector3.UP
+	var bn := int(round(clampf(4.0 + hard * 1.5, 4.0, 9.0)))
+	_emit_burst(center, VoxelTypes.color_of(id).darkened(0.1), bn, 0.5, 45.0, 2.2, 4.2, 13.0, bdir, clampf(1.8 + hard * 0.25, 1.8, 2.8))
+	# Block-shaped pop: scale up + alpha-fade the already-positioned crack cube so the whole block
+	# reads as bursting instead of vanishing in one frame. Guarded so re-targeting cancels it cleanly.
+	if _crack and _crack_mat and _crack.visible:
+		_crack_popping = true
+		_crack.scale = Vector3.ONE
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(_crack, "scale", Vector3(1.35, 1.35, 1.35), 0.12)
+		tw.tween_property(_crack_mat, "shader_parameter/alpha_mul", 0.0, 0.12)
+		tw.chain().tween_callback(func() -> void:
+			_crack_popping = false
+			_crack.visible = false
+			_crack.scale = Vector3.ONE
+			_crack_mat.set_shader_parameter("alpha_mul", 1.0))
 	get_tree().call_group("ducker", "duck", 0.22, 0.35)
 	world_manager.set_block(cell.x, cell.y, cell.z, VoxelTypes.AIR)
 	# A torch sitting on the block we just mined would hang in mid-air (and re-persist there on
@@ -1596,6 +1664,16 @@ func _break_block(cell: Vector3i, id: int) -> void:
 	var drop := VoxelTypes.drop_of(id)
 	if drop != VoxelTypes.AIR:
 		_spawn_drop(cell, drop)
+	# Rare-ore payoff: a harvested vein was silent in the HUD. Keyed off the broken block `id`
+	# (iron/gold drop the raw ore, not a distinct gem), and only reached on a drop-yielding break
+	# (the tier gate returned early above), so this never fires on a doomed too-weak swing.
+	if id == VoxelTypes.DIAMOND_ORE or id == VoxelTypes.GOLD_ORE or id == VoxelTypes.IRON_ORE:
+		var _oc := VoxelTypes.color_of(id)
+		var _big := id == VoxelTypes.DIAMOND_ORE
+		if hud and hud.has_method("show_toast"):
+			hud.show_toast(VoxelTypes.name_of(id) + "!", _oc)
+		_emit_burst(center, _oc, 10 if _big else 7, 0.5, 90.0, 0.8, 2.0, 3.0, Vector3.UP, 1.6 if _big else 1.1)   # bright celebratory sparkle
+		_play_snd(snd_pickup, 0.0, 1.25 if _big else 1.1)   # rising-pitch chime
 	if id == VoxelTypes.LEAVES and randf() < 0.2:
 		_spawn_drop(cell, VoxelTypes.APPLE)
 	if id == VoxelTypes.GRASS and randf() < 0.35:
@@ -1628,17 +1706,25 @@ func _reset_mining() -> void:
 		_mine_progress = 0.0
 		if hud: hud.set_mine_progress(0.0)
 	_mine_cell = Vector3i(2147483647, 0, 0)
+	_crack_weak_cell = Vector3i(9999, 9999, 9999)   # force a fresh weak-tint eval on the next target
+	# NOTE: do NOT clear _crack_popping here — _reset_mining runs right after _break_block kicks the
+	# break pop, so the pop tween + _update_crack's guard own its lifecycle.
 
 func _try_place() -> void:
 	if _place_cd > 0.0 or world_manager == null or not ray.is_colliding():
 		return
 	var id := inventory.id_of(selected)
 	if not VoxelTypes.is_placeable(id) or inventory.count_of(selected) <= 0:
+		# Don't fail silently — say why, once per RMB press (`_rmb_down` is still false this frame).
+		if not _rmb_down and hud and hud.has_method("show_toast"):
+			hud.show_toast("Nothing to place", Color(0.85, 0.85, 0.9))
 		return
 	var cell := _cell_from_hit(0.5)
 	if _cell_overlaps_player(cell):
+		if not _rmb_down and hud and hud.has_method("show_toast"):
+			hud.show_toast("Too close to place", Color(1.0, 0.8, 0.55))
 		return
-	_place_cd = 0.18
+	_place_cd = 0.22   # slightly slower than 0.18 so the viewmodel push (0.2s) recovers between placements — discrete jabs, not a mush
 	# Torches are light props placed into the empty cell, not voxels.
 	if id == VoxelTypes.TORCH:
 		if world_manager.get_block(cell.x, cell.y, cell.z) == VoxelTypes.AIR and world_manager.place_torch(cell):
@@ -1660,6 +1746,7 @@ func _try_place() -> void:
 	_vm_place = 1.0                        # first-person placing "push" on the viewmodel
 	# A small dust poof on placement (matches the break-particle feedback).
 	_emit_burst(Vector3(cell) + Vector3(0.5, 0.5, 0.5), VoxelTypes.color_of(id), 8, 0.4, 78.0, 0.8, 2.0, 5.0)
+	_land_squash = maxf(_land_squash, 0.08)   # sub-swing camera settle so a place lands in the view (smaller than the 0.12 mining nod)
 	on_inventory_changed()
 	# Placing a Monolith registers it as a Chronicle Stone (world-persisted; the Chronicle system
 	# binds to it and begins engraving your deeds).
@@ -1688,6 +1775,8 @@ func _try_eat() -> void:
 	var restore: int = VoxelTypes.food_value(inventory.id_of(slot))
 	inventory.remove_one(slot)
 	hunger = minf(MAX_HUNGER, hunger + restore)
+	if hud and hud.has_method("show_toast"):
+		hud.show_toast("+%d hunger" % restore, Color(0.85, 0.95, 0.6))   # so +2 raw vs +6 cooked is legible
 	_play_snd(snd_eat)
 	_vm_place = 1.0                        # raise-to-mouth motion on the viewmodel
 	if camera:                            # a few crumbs at the mouth so eating reads, not just a sound
@@ -1711,17 +1800,48 @@ func _update_highlight() -> void:
 		if collider and collider is Node and (collider as Node).is_in_group("mob"):
 			highlight.visible = false
 			_hide_crack()
+			_clear_target_name()   # aiming at a mob, not a block
 			_push_cross_state(2)   # aiming at a mob
 			return
 		var cell := _cell_from_hit(-0.5)
 		highlight.global_position = Vector3(cell)
 		highlight.visible = true
 		_update_crack(cell)
+		# "What am I aiming at" readout + tier hint, change-gated on the looked-at block id so the HUD
+		# is touched only when the target changes (mirrors the _push_cross_state pattern below).
+		var tid: int = world_manager.get_block(cell.x, cell.y, cell.z)
+		# A planted plot reads as bare FARMLAND to name_of, so fold the crop's growth state into the
+		# change-gate via negative sentinels (distinct from -1 and every real tid) — this way the
+		# growing→ready transition fires the readout exactly once as the crop matures.
+		var above := Vector3i(cell.x, cell.y + 1, cell.z)
+		var is_crop := false
+		var crop_ready := false
+		var eff := tid
+		if tid == VoxelTypes.FARMLAND and farm and farm.has_crop(above):
+			is_crop = true
+			crop_ready = farm.is_mature(above)
+			eff = -11 if crop_ready else -10
+		if eff != _hl_id:
+			_hl_id = eff
+			if hud and hud.has_method("set_target_name"):
+				if is_crop:
+					hud.set_target_name("Wheat — ready to harvest" if crop_ready else "Wheat — growing", false)
+				else:
+					hud.set_target_name(VoxelTypes.name_of(tid), VoxelTypes.mine_tier(tid) > _pickaxe_tier())
 		_push_cross_state(1)       # a block in reach
 	else:
 		highlight.visible = false
 		_hide_crack()
+		_clear_target_name()       # nothing in reach
 		_push_cross_state(0)       # nothing in reach
+
+## Clear the aimed-block HUD readout, gated so it only fires on the transition off a block.
+func _clear_target_name() -> void:
+	if _hl_id == -1:
+		return
+	_hl_id = -1
+	if hud and hud.has_method("set_target_name"):
+		hud.set_target_name("")
 
 ## Only push the crosshair state to the HUD when it actually changes (most frames it's identical,
 ## so this skips a per-frame has_method lookup + Label.modulate rewrite). Visual result unchanged.
@@ -1736,14 +1856,30 @@ func _update_crack(cell: Vector3i) -> void:
 	if _crack == null:
 		return
 	if _mine_progress > 0.0:
+		if _crack_popping:                       # a new mine started mid-pop — abandon the break tween
+			_crack_popping = false
+			_crack.scale = Vector3.ONE
+			_crack_mat.set_shader_parameter("alpha_mul", 1.0)
 		_crack.global_position = Vector3(cell) + Vector3(0.5, 0.5, 0.5)
 		_crack.visible = true
 		_crack_mat.set_shader_parameter("progress", _mine_progress)
-	else:
+		# Tint the cracks RED while the held pickaxe is too weak to harvest — a persistent
+		# "you're wasting this" signal (the tier-gate toast fires only once per target). Cached on
+		# target change so it's one get_block + mine_tier per new block, not per frame.
+		if cell != _crack_weak_cell:
+			_crack_weak_cell = cell
+			var wid: int = world_manager.get_block(cell.x, cell.y, cell.z)
+			var weak := VoxelTypes.mine_tier(wid) > _pickaxe_tier()
+			_crack_mat.set_shader_parameter("crack_color", Color(0.6, 0.06, 0.04) if weak else Color(0, 0, 0))
+	elif not _crack_popping:                     # let the break pop tween finish; it hides itself
 		_crack.visible = false
 
 func _hide_crack() -> void:
 	if _crack:
+		_crack_popping = false
+		_crack.scale = Vector3.ONE
+		if _crack_mat:
+			_crack_mat.set_shader_parameter("alpha_mul", 1.0)
 		_crack.visible = false
 
 ## Returns how many were actually stored (0 if the inventory was full, so the drop
@@ -1752,7 +1888,15 @@ func collect_item(id: int, n: int) -> int:
 	var left := inventory.add(id, n)
 	var taken := n - left
 	if taken > 0:
-		_play_snd(snd_pickup)
+		# Rising pitch ladder within a fast burst (mining a vein streams pickups on near-consecutive
+		# frames), resetting to base pitch once the stream stops for >0.35s so it never pins high.
+		var now := Time.get_ticks_msec() / 1000.0
+		if now - _pickup_streak_t > 0.35:
+			_pickup_streak = 0
+		else:
+			_pickup_streak = mini(_pickup_streak + 1, 10)
+		_pickup_streak_t = now
+		_play_snd(snd_pickup, 0.0, clampf(1.0 + _pickup_streak * 0.06, 1.0, 1.6))
 		on_inventory_changed()
 	return taken
 
@@ -1991,6 +2135,13 @@ func _ground_at(x: float, z: float) -> Vector3:
 	global_position = pos
 	velocity = Vector3.ZERO
 	apply_floor_snap()
+	# Remember the authoritative pure-function ground for this column so the post-respawn ground-pin
+	# (_physics_process) can snap us down if we were placed above the real surface (e.g. on top of a
+	# thin structure/build the column-search landed on) or the collider wasn't in the physics space
+	# yet for apply_floor_snap. solid_top_y needs no collider, so it's correct even before streaming.
+	_respawn_pin_x = fx
+	_respawn_pin_z = fz
+	_respawn_pin_t = 0.8
 	return global_position
 
 func _spawn_drop(cell: Vector3i, id: int) -> void:

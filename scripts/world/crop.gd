@@ -21,6 +21,7 @@ const OFFS := [
 # One material + one mesh-per-stage shared by EVERY crop in the world, built lazily once. Sharing
 # the mesh resource lets the renderer batch the whole field; per-crop sway is just a node rotation.
 static var _crop_mat: StandardMaterial3D
+static var _ripe_mat: StandardMaterial3D
 static var _stage_mesh: Array = [null, null, null]
 
 const SWAY_DIST_SQ := 26.0 * 26.0   # only animate sway for crops the player is near enough to see move
@@ -63,7 +64,10 @@ func _build() -> void:
 		_model.queue_free()
 	_model = MeshInstance3D.new()
 	_model.mesh = _stage_mesh_for(clampi(stage, 0, STAGES - 1))
-	_model.material_override = _shared_material()
+	# Ripe crops use a subtly self-lit material so a field that matured off-screen still reads as
+	# "ready" at a glance (persistent, unlike the one-shot ripen sparkle). Shared per-stage, so this
+	# adds ZERO per-instance and per-frame cost — the whole field's readability improves for free.
+	_model.material_override = _ripe_material() if is_mature() else _shared_material()
 	add_child(_model)
 
 # --- shared, cached resources -----------------------------------------------------------
@@ -75,6 +79,20 @@ static func _shared_material() -> StandardMaterial3D:
 		m.cull_mode = BaseMaterial3D.CULL_DISABLED
 		_crop_mat = m
 	return _crop_mat
+
+## Shared material for the ripe stage — same as the growing one but with a gentle warm glow so a
+## harvestable plot stands out across a field even when it matured while the player was away.
+static func _ripe_material() -> StandardMaterial3D:
+	if _ripe_mat == null:
+		var m := StandardMaterial3D.new()
+		m.vertex_color_use_as_albedo = true
+		m.roughness = 1.0
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		m.emission_enabled = true
+		m.emission = Color(1.0, 0.86, 0.35)
+		m.emission_energy_multiplier = 0.5
+		_ripe_mat = m
+	return _ripe_mat
 
 static func _stage_mesh_for(stage_i: int) -> Mesh:
 	if _stage_mesh[stage_i] == null:

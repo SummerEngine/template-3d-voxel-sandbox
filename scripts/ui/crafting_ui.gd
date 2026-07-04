@@ -132,15 +132,27 @@ func _out_name(r: Dictionary) -> String:
 func _out_color(r: Dictionary) -> Color:
 	return r.get("out_color", VoxelTypes.color_of(int(r.get("out_id", 0))))
 
+## Suffix surfacing a food output's hunger restore, so the cook-vs-eat-raw payoff
+## (e.g. Cooked Meat restores 6 vs Raw Meat 2) is visible at the point of decision.
+func _food_suffix(id: int) -> String:
+	var fv := VoxelTypes.food_value(int(id))
+	return (" · restores %d hunger" % fv) if fv > 0 else ""
+
 ## Recipe-scroll height that keeps the Close button on-screen: full 380 on tall windows,
 ## shrinking (down to 200) on short ones (mirrors pause_menu.gd's viewport-fit approach).
 func _recipe_scroll_cap() -> float:
 	return clampf(get_viewport().get_visible_rect().size.y - 380.0, 200.0, 380.0)
 
+## Recipe-scroll width that keeps the Craft/Close buttons on-screen on narrow windows:
+## full 600 on wide windows, shrinking (down to 300) so a ~375px viewport still fits.
+func _recipe_scroll_w() -> float:
+	return clampf(get_viewport().get_visible_rect().size.x - 60.0, 300.0, 600.0)
+
 ## Re-fit the recipe scroll if the window is resized while the panel is open.
 func _on_viewport_resized() -> void:
 	if _recipe_scroll:
 		_recipe_scroll.custom_minimum_size.y = _recipe_scroll_cap()
+		_recipe_scroll.custom_minimum_size.x = _recipe_scroll_w()
 
 func _build() -> void:
 	_panel = Control.new()
@@ -195,7 +207,7 @@ func _build() -> void:
 
 	# Scrollable recipe list, grouped by category.
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(600, _recipe_scroll_cap())   # capped so the Close button stays on-screen in short windows
+	scroll.custom_minimum_size = Vector2(_recipe_scroll_w(), _recipe_scroll_cap())   # capped both axes so Craft/Close stay on-screen in small/narrow windows
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_recipe_scroll = scroll
 	get_viewport().size_changed.connect(_on_viewport_resized)
@@ -322,7 +334,7 @@ func _build_recipe_row(idx: int) -> Control:
 	out_cell.icon.texture = out_tex
 	out_cell.swatch.color = Color(0, 0, 0, 0) if out_tex != null else _out_color(r)
 	out_cell.count.text = str(int(r.get("out_n", 1)))
-	out_cell.panel.tooltip_text = "%d %s" % [int(r.get("out_n", 1)), _out_name(r)]
+	out_cell.panel.tooltip_text = ("%d %s" % [int(r.get("out_n", 1)), _out_name(r)]) + _food_suffix(int(r.get("out_id", 0)))
 	row.add_child(out_cell.panel)
 
 	var name_lbl := Label.new()
@@ -394,7 +406,7 @@ func _refresh() -> void:
 		rr.row.modulate = Color(1, 1, 1, 1) if (craftable or owned) else Color(1, 1, 1, 0.4)
 		rr.btn.disabled = owned or not afford
 		rr.btn.text = "Owned" if owned else "Craft"
-		rr.btn.tooltip_text = "%s → %d %s" % [_inputs_label(r), int(r.get("out_n", 1)), _out_name(r)]
+		rr.btn.tooltip_text = ("%s → %d %s" % [_inputs_label(r), int(r.get("out_n", 1)), _out_name(r)]) + _food_suffix(int(r.get("out_id", 0)))
 		# Colour each ingredient green (you have enough) or red (missing some) so it's obvious at a
 		# glance what a recipe still needs, and spell it out in the tooltip.
 		for inp in rr.get("inputs", []):
@@ -474,6 +486,7 @@ func open_for(ctx: String) -> void:
 	_panel.visible = true
 	if _recipe_scroll:   # re-fit in case the window was resized while the panel was closed
 		_recipe_scroll.custom_minimum_size.y = _recipe_scroll_cap()
+		_recipe_scroll.custom_minimum_size.x = _recipe_scroll_w()
 	_play(_snd_open)
 	_toast.text = ""
 	_set_title()

@@ -81,19 +81,19 @@ func _on_kill(_pos: Vector3) -> void:
 	elif _kills == 25:
 		_engrave("Twenty-five foes laid low.")
 	elif _kills == 100:
-		_engrave("A hundred slain — the dead know this name.")
+		_engrave("A hundred slain — the dead know this name.", true)
 
 func _on_night() -> void:
 	# Read the LATCHED blood flag, not the live one: main.gd clears day_night.blood_moon at dawn
 	# BEFORE emitting night_survived (which drives this), so the live flag is always false here.
 	# last_blood captures the night that was actually survived (set in main.gd before the clear).
 	if day_night and day_night.last_blood:
-		_engrave("Endured a blood-rimmed moon.")
+		_engrave("Endured a blood-rimmed moon.", true)
 	elif _day <= 2 and _has_bound and world.monoliths.has(_bound) and world.monoliths[_bound].size() <= 1:
 		_engrave("Survived the first night.")   # gated on a fresh stone so a loaded save can't re-fire it
 
 # ---------- engraving ----------
-func _engrave(text: String) -> void:
+func _engrave(text: String, milestone: bool = false) -> void:
 	if not _has_bound or world == null or not world.monoliths.has(_bound):
 		return
 	var season := ""
@@ -107,7 +107,9 @@ func _engrave(text: String) -> void:
 	world.monoliths[_bound] = lines
 	_grow_if_due(lines.size())
 	if player and player.hud and player.hud.has_method("show_toast"):
-		player.hud.show_toast("The stone remembers...", Color(0.74, 0.78, 0.9))
+		# Surface WHAT was recorded, and let milestone deeds land brighter than routine ones.
+		var tint := Color(1.0, 0.86, 0.55) if milestone else Color(0.74, 0.78, 0.9)
+		player.hud.show_toast("Engraved: " + text, tint)
 	if _open:
 		_refresh()
 
@@ -120,6 +122,11 @@ func _grow_if_due(count: int) -> void:
 		# build). Guarding just for AIR would let the column punch through a player's interior.
 		if world.get_block(c.x, c.y, c.z) == VoxelTypes.AIR and not world.overrides.has(c):
 			world.set_block(c.x, c.y, c.z, VoxelTypes.POLISHED_STONE)
+			# The monument physically rose — make the growth felt at the pillar, not silent.
+			if player and player.hud and player.hud.has_method("show_toast"):
+				player.hud.show_toast("The monolith rises.", Color(0.8, 0.85, 1.0))
+			if player and player.has_method("_emit_burst"):
+				player._emit_burst(Vector3(c) + Vector3(0.5, 0.5, 0.5), Color(0.72, 0.74, 0.8), 10, 0.7, 30.0, 0.5, 1.4, 2.0)
 
 # ---------- Annals UI ----------
 func _build_panel() -> void:

@@ -339,9 +339,13 @@ func set_block(wx: int, wy: int, wz: int, t: int, s: int = -9999) -> void:
 	if wy <= 0 or wy >= WORLD_H:
 		return                                  # never edit the bedrock floor
 	var key := Vector3i(wx, wy, wz)
-	var old_t := get_block(wx, wy, wz)          # capture BEFORE mutating, to detect a solid<->air flip
-	if t == generate_block(wx, wy, wz, s):      # pass the column surface to skip a noise recompute when known
-		overrides.erase(key)                    # edit matches nature -> no override needed
+	# Compute this column's surface height ONCE (mining calls set_block with s=-9999), then reuse it
+	# for both the old-value read and the nature test — was 2-3 full surface_height (noise) recomputes
+	# per edit on the main thread. old_t is inlined off `overrides` to skip get_block's own recompute.
+	var s2 := s if s != -9999 else surface_height(wx, wz)
+	var old_t: int = overrides[key] if overrides.has(key) else generate_block(wx, wy, wz, s2)
+	if t == generate_block(wx, wy, wz, s2):     # edit matches nature -> no override needed
+		overrides.erase(key)
 	else:
 		overrides[key] = t
 	_rebuild(chunk_x(wx), chunk_z(wz))

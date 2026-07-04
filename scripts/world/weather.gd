@@ -40,6 +40,13 @@ var _cloud := 0.2
 var _wet := 0.2
 var _temp := 0.6
 var _wind := 0.3
+# Cached climate TARGETS — recomputed with the other slow world queries in the ~3x/s throttle block,
+# not every frame. The scalars above low-pass toward these at delta*0.05..0.15, so a target sampled
+# 10x/s is indistinguishable from 60x/s (~180 -> ~10 Perlin evals/sec, a small thermals/CPU win).
+var _cloud_t := 0.5
+var _wet_t := 0.3
+var _temp_t := 0.6
+var _wind_t := 0.3
 var _cloud_drift := 0.0
 var _noise := FastNoiseLite.new()
 
@@ -223,6 +230,7 @@ func _process(delta: float) -> void:
 		_derive_weather()
 		_sheltered = _check_sheltered()
 		_desert = world.has_method("_is_desert") and world._is_desert(int(player.global_position.x), int(player.global_position.z))
+		_recompute_climate_targets()
 		if world.has_method("solid_top_y"):   # ground plane for rain splashes (edit-aware: roofs/floors count)
 			# Clamped to sea level: solid_top_y skips water, and rain-on-water should splash on the
 			# SURFACE, not the seabed.
@@ -238,26 +246,27 @@ func _process(delta: float) -> void:
 func _n01(v: float) -> float:
 	return clampf(v * 0.5 + 0.5, 0.0, 1.0)
 
-## Drift the four climate scalars toward noise-driven targets (smooth, gradual).
-func _advance_climate(delta: float) -> void:
-	_clock += delta
-	var desert: bool = _desert        # cached + refreshed in the throttled climate block (was a per-frame noise query)
-
+## Recompute the four climate TARGETS from the drifting noise + season/desert. Runs in the ~3x/s
+## throttle block, NOT every frame — the scalars low-pass toward these slowly so 10x/s is plenty.
+func _recompute_climate_targets() -> void:
+	var desert: bool = _desert
 	var nc := _n01(_noise.get_noise_1d(_clock * 2.0))
 	var nw := _n01(_noise.get_noise_1d(_clock * 2.0 + 4000.0))
 	var nv := _n01(_noise.get_noise_1d(_clock * 2.5 + 9000.0))
-
 	var s: int = season
-	var cloud_t: float = clampf(nc + SEASON_CLOUD[s] + (-0.10 if desert else 0.0), 0.0, 1.0)
-	var wet_t: float = clampf(nw + SEASON_WET[s] + (-0.45 if desert else 0.0), 0.0, 1.0)
-	var temp_t: float = clampf(SEASON_TEMP[s] + (nc - 0.5) * 0.15 + (0.25 if desert else 0.0), 0.0, 1.0)
-	var wind_t: float = clampf(nv + (0.12 if desert else 0.0), 0.0, 1.0)
+	_cloud_t = clampf(nc + SEASON_CLOUD[s] + (-0.10 if desert else 0.0), 0.0, 1.0)
+	_wet_t = clampf(nw + SEASON_WET[s] + (-0.45 if desert else 0.0), 0.0, 1.0)
+	_temp_t = clampf(SEASON_TEMP[s] + (nc - 0.5) * 0.15 + (0.25 if desert else 0.0), 0.0, 1.0)
+	_wind_t = clampf(nv + (0.12 if desert else 0.0), 0.0, 1.0)
 
-	_cloud = move_toward(_cloud, cloud_t, delta * 0.08)
-	_wet = move_toward(_wet, wet_t, delta * 0.06)
-	_temp = move_toward(_temp, temp_t, delta * 0.05)
-	_wind = move_toward(_wind, wind_t, delta * 0.15)
-	_cloud_drift += delta * (0.004 + _wind * 0.02)
+## Per-frame: drift the four climate scalars toward the cached targets (smooth, gradual).
+func _advance_climate(delta: float) -> void:
+	_clock += delta
+	_cloud = move_toward(_cloud, _cloud_t, delta * 0.08)
+	_wet = move_toward(_wet, _wet_t, delta * 0.06)
+	_temp = move_toward(_temp, _temp_t, delta * 0.05)
+	_wind = move_toward(_wind, _wind_t, delta * 0.15)
+	_cloud_drift += delta * (0.004 + _wind * 0.02)   # stays per-frame — feeds the sky cloud_time
 
 ## Map the climate scalars to a discrete weather + intensity for particles/overlay/audio.
 func _derive_weather() -> void:

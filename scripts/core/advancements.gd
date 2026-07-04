@@ -119,6 +119,7 @@ func _grant(a: Dictionary) -> void:
 # --- panel ---
 func _build_panel() -> void:
 	layer = 7
+	add_to_group("advancements")   # let other overlays coordinate (mirrors crafting_ui/chest_ui groups)
 	_panel = Control.new()
 	_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -162,10 +163,33 @@ func _refresh_panel() -> void:
 		row.text = "%s  %s — %s" % ["✓" if done else "○", a.title, a.desc]
 		row.modulate = Color(0.6, 1.0, 0.65) if done else Color(0.7, 0.72, 0.78)
 
+func is_open() -> bool:
+	return open
+
+## Called by the pause menu / other overlays so the panel never lingers under a modal.
+func close() -> void:
+	if not open:
+		return
+	open = false
+	_panel.visible = false
+
+## True if a content modal (crafting / chest / chronicle) is currently open — the
+## advancements panel refuses to open over one (mirrors crafting_ui.toggle's guard).
+func _modal_open() -> bool:
+	for grp in ["crafting_ui", "chest_ui", "chronicle"]:
+		var n = get_tree().get_first_node_in_group(grp)
+		if n and n.has_method("is_open") and n.is_open():
+			return true
+	return false
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_J:
 		# Don't open over another menu (crafting/pause free the mouse) or while paused.
 		if get_tree().paused or (not open and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED):
+			return
+		# Explicitly refuse to open over an open crafting/chest/chronicle modal so the two
+		# panels can't both be visible and overlapping (matches the modal-exclusion pattern).
+		if not open and _modal_open():
 			return
 		open = not open
 		_refresh_panel()

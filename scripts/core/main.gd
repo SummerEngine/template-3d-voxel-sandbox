@@ -343,7 +343,8 @@ func _setup_sun() -> void:
 	add_child(_sun)
 
 func _setup_ambient() -> void:
-	_play_loop("res://assets/audio/music/theme.mp3", -17.0, "Music")    # background theme
+	# The in-game soundtrack is ambience.gd's day/night crossfade (Music bus); the old
+	# theme.mp3 backdrop was removed to stop two tracks stacking/muddying the Music bus.
 	_play_loop("res://assets/audio/ambient/wind.mp3", -24.0, "Ambient") # soft wind under it
 	# Blood-moon stinger (one-shot, played on the siege-night phase change).
 	_stinger = AudioStreamPlayer.new()
@@ -416,11 +417,19 @@ func _on_phase_changed(is_night: bool) -> void:
 			bm = night_no / BLOOD_MOON_EVERY   # 1st blood moon, 2nd, ... — grows in teeth (more brutes), not just numbers
 			count = mini(ABSOLUTE_MAX_MOBS + 6, count + 5 + bm)   # they come in force, bounded
 			if _stinger and _stinger.stream:
+				# Per-fire pitch jitter (later/fiercer blood moons bias slightly deeper) so the
+				# recurring sting isn't robotically identical every 5th night.
+				_stinger.pitch_scale = randf_range(0.94, 1.02) * (1.0 - min(bm, 4) * 0.02)
 				_stinger.play()                            # ominous blood-moon sting
 		# Nightfall lands as a beat: a jolt of camera trauma + a brief music duck under the toast.
 		if player and player.has_method("add_trauma"):
 			player.add_trauma(0.15)
-		get_tree().call_group("ducker", "duck", 0.6, 0.5)
+		# Exactly one duck per nightfall (duck() kills any prior tween, so a second call would
+		# override): a blood moon ducks deeper/longer to clear the mix under its stinger.
+		if blood:
+			get_tree().call_group("ducker", "duck", 0.85, 0.9)
+		else:
+			get_tree().call_group("ducker", "duck", 0.6, 0.5)   # generic nightfall duck
 		_spawn_hostiles(count, blood, bm)
 		# On a blood moon, part of the horde erupts straight out of your densest killing grounds.
 		if blood and hauntfields:

@@ -77,7 +77,9 @@ func _apply() -> void:
 
 	if _sky:
 		var horizon := NIGHT_HORIZON.lerp(DAY_HORIZON, daylight).lerp(DUSK_GLOW, glow * 0.6).lerp(BLOOD_HORIZON, blood)
-		_sky.set_shader_parameter("top_color", NIGHT_TOP.lerp(DAY_TOP, daylight).lerp(BLOOD_TOP, blood))
+		# Bleed a little dusk warmth UP the dome (gated by `glow`, so daytime blue is untouched and it
+		# only widens the sunset band at dawn/dusk); BLOOD_TOP stays last so siege nights aren't shifted.
+		_sky.set_shader_parameter("top_color", NIGHT_TOP.lerp(DAY_TOP, daylight).lerp(DUSK_GLOW, glow * 0.2).lerp(BLOOD_TOP, blood))
 		_sky.set_shader_parameter("horizon_color", horizon)
 		_sky.set_shader_parameter("star_amount", clampf(1.0 - daylight * 2.0, 0.0, 1.0))
 		_sky.set_shader_parameter("blood", blood)   # crimson swollen moon + aureole on siege nights

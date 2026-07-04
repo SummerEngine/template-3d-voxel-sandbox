@@ -22,6 +22,7 @@ var _decal_i := 0
 var _decay_t := DECAY_EVERY
 var _rng := RandomNumberGenerator.new()
 var _announced := false
+var _clawup_snd: AudioStream = null   # cached so all eruptions in a wave reuse one resource
 
 func setup(w, p) -> void:
 	world = w
@@ -128,7 +129,7 @@ func clawup_vfx(pos: Vector3) -> void:
 	m.albedo_color = Color(0.32, 0.22, 0.14)
 	bm.material = m
 	p.mesh = bm
-	p.amount = 22
+	p.amount = 34
 	p.one_shot = true
 	p.lifetime = 0.8
 	p.explosiveness = 0.9
@@ -141,6 +142,41 @@ func clawup_vfx(pos: Vector3) -> void:
 	add_child(p)
 	p.emitting = true
 	get_tree().create_timer(1.6).timeout.connect(p.queue_free)
+	# A few larger clods heave up and fall so the ground visibly ruptures.
+	var p2 := CPUParticles3D.new()
+	var bm2 := BoxMesh.new()
+	bm2.size = Vector3(0.28, 0.28, 0.28)
+	var m2 := StandardMaterial3D.new()
+	m2.albedo_color = Color(0.30, 0.20, 0.12)
+	bm2.material = m2
+	p2.mesh = bm2
+	p2.amount = 5
+	p2.one_shot = true
+	p2.lifetime = 1.1
+	p2.explosiveness = 0.9
+	p2.direction = Vector3.UP
+	p2.spread = 30.0
+	p2.initial_velocity_min = 1.2
+	p2.initial_velocity_max = 2.6
+	p2.gravity = Vector3(0, -9.0, 0)
+	p2.global_position = pos
+	add_child(p2)
+	p2.emitting = true
+	get_tree().create_timer(1.9).timeout.connect(p2.queue_free)
+	# A low, detuned thud so the player LOOKS at the ground bursting open beside them.
+	if _clawup_snd == null and ResourceLoader.exists("res://assets/audio/weather/wind_gust.mp3"):
+		_clawup_snd = load("res://assets/audio/weather/wind_gust.mp3")
+	if _clawup_snd:
+		var a := AudioStreamPlayer3D.new()
+		a.stream = _clawup_snd
+		a.pitch_scale = 0.45
+		a.volume_db = -3.0
+		if AudioServer.get_bus_index("SFX") != -1:
+			a.bus = "SFX"
+		add_child(a)
+		a.global_position = pos
+		a.play()
+		get_tree().create_timer(2.0).timeout.connect(a.queue_free)
 
 func _process(delta: float) -> void:
 	_decay_t -= delta

@@ -19,6 +19,7 @@ var _hunger: Label
 var _tool: Label
 var _armor: Label
 var _block_name: Label
+var _target_name: Label           # what you're AIMING at (name + "needs a better pickaxe" when too weak)
 var _controls: PanelContainer
 var _controls_hint: PanelContainer   # tiny "H — Controls" chip shown when the controls panel is hidden
 var _hotbar: HBoxContainer
@@ -50,6 +51,7 @@ var _blood_vig: TextureRect      # pulsing red edge-vignette during a blood moon
 var _blood_on := false
 var _blood_phase := 0.0
 var _time_label: Label           # persistent "Day N" / "Night N" readout
+var _time_plain := ""            # undecorated "Day N"/"Night N" (death screen uses this, not the "· BLOOD MOON" label text)
 var _objective: Label            # persistent "current goal" line (fed by advancements.next_goal)
 
 func _ready() -> void:
@@ -305,6 +307,16 @@ func _build() -> void:
 	_outline(_block_name)
 	add_child(_block_name)
 
+	# "What am I aiming at" readout, just above the crosshair. Shows the targeted block's name and,
+	# when your pickaxe is too weak to harvest it, why (turns red). Fed from the player's per-frame
+	# look path, change-gated so it only updates when the aimed block changes.
+	_target_name = Label.new()
+	_target_name.add_theme_font_size_override("font_size", 15)
+	_target_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_target_name.visible = false
+	_outline(_target_name)
+	add_child(_target_name)
+
 	_hotbar = HBoxContainer.new()
 	_hotbar.add_theme_constant_override("separation", SLOT_PAD)
 	add_child(_hotbar)
@@ -518,6 +530,9 @@ func _layout() -> void:
 	_hotbar.position = Vector2(vp.x * 0.5 - total_w * 0.5, vp.y - SLOT - 16)
 	_block_name.position = Vector2(vp.x * 0.5 - 100, vp.y - SLOT - 44)
 	_block_name.size = Vector2(200, 20)
+	if _target_name:
+		_target_name.size = Vector2(360, 20)
+		_target_name.position = Vector2(vp.x * 0.5 - 180, vp.y * 0.5 + 42)   # just under the crosshair + mine bar
 	_center_controls()
 	if _fps:
 		_fps.size = Vector2(240, 60)
@@ -561,8 +576,8 @@ func show_death() -> void:
 	if _death_dim == null:
 		return
 	# Scoreboard moment: headline how far the run got, from the live Day/Night readout.
-	if _time_label and _time_label.text != "":
-		_death_sub.text = "You made it to %s\nPress R or click Respawn" % _time_label.text
+	if _time_plain != "":
+		_death_sub.text = "You made it to %s\nPress R or click Respawn" % _time_plain
 	for n in [_death_dim, _death_title, _death_sub, _respawn_btn]:
 		n.visible = true
 	_death_dim.modulate.a = 0.0
@@ -612,12 +627,15 @@ func set_time_state(is_night: bool, n: int, blood: bool) -> void:
 	if blood:
 		_time_label.text = "Night %d  ·  BLOOD MOON" % n
 		_time_label.modulate = Color(1.0, 0.4, 0.35)
+		_time_plain = "Night %d" % n
 	elif is_night:
 		_time_label.text = "Night %d" % n
 		_time_label.modulate = Color(0.72, 0.8, 1.0)
+		_time_plain = "Night %d" % n
 	else:
 		_time_label.text = "Day %d" % maxi(1, n)
 		_time_label.modulate = Color(0.95, 0.95, 0.82)
+		_time_plain = "Day %d" % maxi(1, n)
 
 ## Brief red screen flash when the player takes damage. `intensity` (0..1) scales the wash so a
 ## big hit reads harder; defaults to 0.45 so existing no-arg callers (e.g. the void plunge) are unchanged.
@@ -695,6 +713,19 @@ func set_mine_progress(p: float) -> void:
 	_mine_fill.visible = active
 	if active:
 		_mine_fill.size.x = 64.0 * clampf(p, 0.0, 1.0)
+
+## The block currently under the crosshair: its name, and — when your pickaxe is too weak to harvest
+## it — why (red + a "needs a better pickaxe" tail). Empty name hides it. Fed from the player's
+## per-frame look path, change-gated there so this only updates when the aimed block changes.
+func set_target_name(txt: String, weak: bool = false) -> void:
+	if _target_name == null:
+		return
+	if txt == "":
+		_target_name.visible = false
+		return
+	_target_name.text = (txt + "  —  needs a better pickaxe") if weak else txt
+	_target_name.modulate = Color(1.0, 0.55, 0.45) if weak else Color(0.92, 0.92, 0.98)
+	_target_name.visible = true
 
 func set_tool(tool_name: String) -> void:
 	if _tool:
