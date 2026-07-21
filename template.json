@@ -1,0 +1,56 @@
+{
+  "id": "3d-voxel-sandbox",
+  "version": "1.0.0",
+  "name": "3D Voxel Sandbox",
+  "engineMinVersion": "0.5.43",
+  "entryScene": "res://scenes/main_menu.tscn",
+  "dimension": "3D",
+  "mechanics": [
+    "first-person-controller",
+    "mouse-look",
+    "creative-fly",
+    "voxel-terrain",
+    "chunked-world",
+    "block-place-and-break",
+    "block-drops",
+    "inventory",
+    "crafting",
+    "chests",
+    "tools-and-weapons",
+    "creature-ai",
+    "hostile-mobs",
+    "day-night-cycle",
+    "weather",
+    "world-save",
+    "minimap",
+    "hud"
+  ],
+  "genres": [
+    "sandbox",
+    "survival",
+    "voxel",
+    "exploration"
+  ],
+  "agentBrief": "A first-person 3D voxel sandbox (Godot 4.6, GDScript only, Forward+, Jolt physics). ENTRY SCENE: res://scenes/main_menu.tscn — the menu boots first and starts the world; scripts/ui/main_menu.gd drives it. WORLD (scripts/world/): the voxel world is chunked — chunk.gd builds a chunk's mesh and chunk_manager.gd streams chunks around the player; voxel_types.gd is the data-driven block registry (add a block type there, not scattered through the code); block_drop.gd spawns pickups when a block breaks; day_night.gd runs the sky cycle, weather.gd the rain/clear states, world_save.gd persists the world. Blocks are addressed by Vector3i cell, 1 block = 1 world unit, a cell's top face is at y + 0.5. PLAYER (scripts/player/): player.gd is a CharacterBody3D with walk/run/jump, mouse look clamped to +/-85 degrees, and a creative-fly toggle on F; a forward RayCast3D with about 6 units of reach picks the targeted block, so left click breaks and right click places on the hit face. inventory.gd holds items, tool_holder.gd and weapon_holder.gd equip from weapon_registry.gd, a STATIC stat table of 42 entries (name, category, damage, attack_speed, mining_power, tier) where each entry resolves to res://assets/models/weapons/<file>.glb — several entries share one model (every maul-family weapon uses warmaul.glb), so adding gear means adding a glb AND a table entry, and nothing scans directories at runtime. The loose *_texture_*.png/.jpg images beside the models are unreferenced duplicates of textures already embedded in the glbs; they stay in the repo for reference but are excluded from the shipped zip (packExclude), so never load them by path. ENTITIES (scripts/entities/): creature.gd is the shared base; animal.gd and fauna.gd are the passive creatures, hostile_mob.gd the aggressive ones. UI (scripts/ui/): hud.gd, minimap.gd, crafting_ui.gd, chest_ui.gd, pause_menu.gd, item_icons.gd and ui_theme.gd (theme it centrally there). CORE (scripts/core/): main.gd is the entry driver, game_state.gd the shared state, advancements.gd the progression hooks, audio_ducker.gd the audio mixing. INPUT: WASD move, mouse look, Space jump or fly up, F toggle fly, 1-5 select block type, left click break, right click place, Esc release the mouse. ASSETS: materials in assets/materials/ are shaders (block_atlas, crack, sky, water, chroma_key); block faces come from the single atlas at assets/textures/blocks/atlas.png, so new block art is an atlas edit plus a voxel_types.gd entry. NOTE: docs/DESIGN.md is behind the code in places — it still describes one node per block and calls the block registry 'planned', but chunked meshing and voxel_types.gd are implemented; trust the scripts. CUSTOMIZE BY: adding block types in voxel_types.gd, retuning player @exports, editing world generation in chunk_manager.gd, adding creatures on creature.gd, reskinning the atlas and models — do not rewrite the chunk streaming or the registry spine.",
+  "shipsProjectGodot": true,
+  "packExclude": [
+    "assets/models/**/*.png",
+    "assets/models/**/*.jpg",
+    "assets/models/**/*.jpeg",
+    "assets/models/*.png",
+    "assets/models/*.jpg",
+    "assets/models/*.jpeg"
+  ],
+  "userFacing": {
+    "tagline": "A first-person voxel world you can mine, build, craft and survive in, ready to make your own.",
+    "highlights": [
+      "First-person controller with walk, run, jump and a creative-fly toggle",
+      "Chunked voxel world with streaming, block placing and breaking on a data-driven block registry",
+      "Inventory, crafting, chests and block drops",
+      "Tools and weapons loaded from folders, so adding gear is a file drop",
+      "Passive creatures and hostile mobs on a shared creature base",
+      "Day/night cycle, weather and world saving",
+      "HUD, minimap, crafting and chest UI, and a themed menu"
+    ]
+  }
+}
