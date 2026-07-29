@@ -1,6 +1,6 @@
 {
   "id": "3d-voxel-sandbox",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "name": "3D Voxel Sandbox",
   "engineMinVersion": "0.5.43",
   "entryScene": "res://scenes/main_menu.tscn",
@@ -42,16 +42,206 @@
     "exploration",
     "crafting"
   ],
-  "agentBrief": "A complete voxel survival and building sandbox (Godot 4.6, GDScript only, Forward+, Jolt physics). ENTRY: res://scenes/main_menu.tscn — the menu titles the game VOXEL CREATIONS and offers SINGLE PLAYER (resumes an existing save via WorldSave.has_save(), else starts fresh) and CREATE NEW WORLD; scenes/loading.tscn covers world generation. INPUT IS DEFINED IN CODE, NOT project.godot: there is NO [input] section — scripts/core/input_actions.gd registers every action at runtime and players rebind keys in-game through Esc -> Settings, backed by scripts/core/game_settings.gd. Do not add actions to project.godot; add them in input_actions.gd or they will not exist for the rebinding UI. Controls: WASD move, Ctrl sprint, Space jump (double-tap toggles creative fly), 1-9/scroll hotbar, left click mine/attack, right click place, Q/E switch weapon, G eat, C crafting, M map, J advancements, F5 first/third person toggle, F3 debug stats, Esc pause. WORLD (scripts/world/, the bulk of the template): chunk.gd + chunk_manager.gd stream terrain with GREEDY MESHING and OFF-THREAD chunk builds — the perf spine, do not rewrite it; voxel_types.gd is the data-driven block registry; structures.gd scatters discoverable ruined towers, guarded crypts and treasure caches with loot; day_night.gd, weather.gd (continuous evolving climate with seasons, rain, snow, sandstorms, thunder), ambience.gd (fireflies, pollen, shooting stars), tree_models.gd, block_drop.gd, world_save.gd, and farm.gd + crop.gd for farming. SEVEN NAMED WORLD-UNEASE SYSTEMS give this template its identity and are worth preserving when reskinning: mirage.gd (heat-shimmer mirages and false oases), oddities.gd (The Wrong Block), hauntfields.gd, chronicle.gd (The Chronicle Stone), echo_sounding.gd, hollows.gd (The Hunger of Hollows) and mimic_builder.gd (Doppelganger Tracks). PLAYER (scripts/player/): player.gd (first/third person, hunger and health), inventory.gd (27 slots), tool_holder.gd and weapon_holder.gd equipping from weapon_registry.gd — a STATIC table of 38 weapons and tools across wood/stone/iron/diamond tiers where several entries share one .glb model; adding gear means a model plus a table row, nothing scans directories at runtime. ENTITIES (scripts/entities/): creature.gd is the shared base, animal.gd and fauna.gd the passive biome life (birds, fish, reptiles, farm animals with positional audio), hostile_mob.gd the night threats — normal, fast runner and brute zombies, blood moons, cave lurkers, daylight burning. UI (scripts/ui/): hud, crafting_ui, chest_ui, minimap, pause_menu, loading, item_icons and ui_theme (theme centrally there). CORE (scripts/core/): main.gd, game_state.gd, advancements.gd, audio_ducker.gd. ASSETS: block faces come from a single atlas (assets/textures/blocks/atlas.png) so new block art is an atlas edit plus a voxel_types.gd entry. The loose *_texture_*.png/.jpg files beside the models are unreferenced duplicates of textures already embedded in the .glb files — they stay in the repo for reference but are excluded from the shipped zip via packExclude, so never load them by path. CUSTOMIZE BY: adding block types in voxel_types.gd, gear rows in weapon_registry.gd, crops in crop.gd, creatures on creature.gd, structures in structures.gd, and retuning generation constants — do not rewrite the chunk streaming, meshing or registry spine.",
+  "agentBrief": "A complete voxel survival and building sandbox (Godot 4.6, GDScript only, Forward+, Jolt physics). ENTRY: res://scenes/main_menu.tscn — the menu titles the game VOXEL CREATIONS and offers SINGLE PLAYER (resumes an existing save via WorldSave.has_save(), else starts fresh) and CREATE NEW WORLD; scenes/loading.tscn covers world generation. INPUT IS DEFINED IN CODE, NOT project.godot: there is NO [input] section — scripts/core/input_actions.gd registers every action at runtime and players rebind keys in-game through Esc -> Settings, backed by scripts/core/game_settings.gd. Do not add actions to project.godot; add them in input_actions.gd or they will not exist for the rebinding UI. Controls: WASD move, Ctrl sprint, Space jump (double-tap toggles creative fly), 1-9/scroll hotbar, left click mine/attack, right click place, Q/E switch weapon, G eat, C crafting, M map, J advancements, F5 first/third person toggle, F3 debug stats, Esc pause. WORLD (scripts/world/, the bulk of the template): chunk.gd + chunk_manager.gd stream terrain with GREEDY MESHING and OFF-THREAD chunk builds — the perf spine, do not rewrite it; voxel_types.gd is the data-driven block registry; structures.gd scatters discoverable ruined towers, guarded crypts and treasure caches with loot; day_night.gd, weather.gd (continuous evolving climate with seasons, rain, snow, sandstorms, thunder), ambience.gd (fireflies, pollen, shooting stars), tree_models.gd, block_drop.gd, world_save.gd, and farm.gd + crop.gd for farming. SEVEN NAMED WORLD-UNEASE SYSTEMS give this template its identity and are worth preserving when reskinning: mirage.gd (heat-shimmer mirages and false oases), oddities.gd (The Wrong Block), hauntfields.gd, chronicle.gd (The Chronicle Stone), echo_sounding.gd, hollows.gd (The Hunger of Hollows) and mimic_builder.gd (Doppelganger Tracks). PLAYER (scripts/player/): player.gd (first/third person, hunger and health), inventory.gd (27 slots), tool_holder.gd and weapon_holder.gd equipping from weapon_registry.gd — a STATIC table of 38 weapons and tools across wood/stone/iron/diamond tiers where several entries share one .glb model; adding gear means a model plus a table row, nothing scans directories at runtime. ENTITIES (scripts/entities/): creature.gd is the shared base, animal.gd and fauna.gd the passive biome life (birds, fish, reptiles, farm animals with positional audio), hostile_mob.gd the night threats — normal, fast runner and brute zombies, blood moons, cave lurkers, daylight burning. UI (scripts/ui/): hud, crafting_ui, chest_ui, minimap, pause_menu, loading, item_icons and ui_theme (theme centrally there). CORE (scripts/core/): main.gd, game_state.gd, advancements.gd, audio_ducker.gd. ASSETS: block faces come from a single atlas (assets/textures/blocks/atlas.png) so new block art is an atlas edit plus a voxel_types.gd entry. Model textures are embedded as Godot-compatible WebP inside the shipped GLB files; generated import sidecars and duplicate loose model textures are not source assets. CUSTOMIZE BY: adding block types in voxel_types.gd, gear rows in weapon_registry.gd, crops in crop.gd, creatures on creature.gd, structures in structures.gd, and retuning generation constants — do not rewrite the chunk streaming, meshing or registry spine.",
   "shipsProjectGodot": true,
-  "packExclude": [
-    "assets/models/**/*.png",
-    "assets/models/**/*.jpg",
-    "assets/models/**/*.jpeg",
-    "assets/models/*.png",
-    "assets/models/*.jpg",
-    "assets/models/*.jpeg"
+  "templateType": "game",
+  "provides": [
+    "control.voxel-avatar",
+    "world.voxel-streaming",
+    "interaction.mine-place",
+    "loop.voxel-survival",
+    "persistence.voxel-world",
+    "session.restart"
   ],
+  "requires": [],
+  "setup": {
+    "installMode": "overlay",
+    "projectSettings": [
+      {
+        "key": "application/config/name",
+        "value": "Voxel Creations"
+      },
+      {
+        "key": "application/config/icon",
+        "value": "res://icon.svg"
+      },
+      {
+        "key": "display/window/stretch/mode",
+        "value": "canvas_items"
+      },
+      {
+        "key": "display/window/stretch/aspect",
+        "value": "expand"
+      },
+      {
+        "key": "physics/3d/physics_engine",
+        "value": "Jolt Physics"
+      },
+      {
+        "key": "rendering/rendering_device/driver.windows",
+        "value": "d3d12"
+      }
+    ],
+    "inputActions": []
+  },
+  "composition": {
+    "controlledEntity": "voxel sandbox avatar",
+    "parts": [
+      {
+        "slot": "control",
+        "id": "voxel-avatar-controller",
+        "provides": [
+          "control.voxel-avatar",
+          "control.first-person",
+          "control.third-person"
+        ],
+        "requires": [],
+        "owns": [
+          "player.motion-state",
+          "camera.mode"
+        ]
+      },
+      {
+        "slot": "world",
+        "id": "streamed-voxel-world",
+        "provides": [
+          "world.voxel-streaming",
+          "world.biomes",
+          "world.weather"
+        ],
+        "requires": [],
+        "owns": [
+          "world.chunks",
+          "world.time",
+          "world.weather-state"
+        ]
+      },
+      {
+        "slot": "interaction",
+        "id": "mine-place-interaction",
+        "provides": [
+          "interaction.mine-place",
+          "world.block-registry"
+        ],
+        "requires": [
+          "world.voxel-streaming"
+        ],
+        "owns": [
+          "world.block-edits"
+        ]
+      },
+      {
+        "slot": "actors",
+        "id": "voxel-creatures",
+        "provides": [
+          "actor.hostile-mob",
+          "actor.biome-fauna"
+        ],
+        "requires": [
+          "world.voxel-streaming"
+        ],
+        "owns": [
+          "creature.health",
+          "creature.intent"
+        ]
+      },
+      {
+        "slot": "loop",
+        "id": "voxel-survival-loop",
+        "provides": [
+          "loop.voxel-survival"
+        ],
+        "requires": [
+          "interaction.mine-place"
+        ],
+        "owns": [
+          "player.hunger",
+          "progress.advancements"
+        ]
+      },
+      {
+        "slot": "persistence",
+        "id": "voxel-world-save",
+        "provides": [
+          "persistence.voxel-world"
+        ],
+        "requires": [
+          "world.voxel-streaming"
+        ],
+        "owns": [
+          "save.world-state"
+        ]
+      },
+      {
+        "slot": "session",
+        "id": "voxel-session",
+        "provides": [
+          "session.restart"
+        ],
+        "requires": [],
+        "owns": [
+          "session.world-selection"
+        ]
+      }
+    ]
+  },
+  "motion": {
+    "status": "bundled",
+    "semanticStates": [
+      "idle",
+      "move",
+      "sprint",
+      "jump",
+      "fly",
+      "mine",
+      "place",
+      "attack",
+      "hit",
+      "death"
+    ],
+    "sockets": [
+      "tool",
+      "weapon"
+    ],
+    "notes": "Existing model animation is preserved; gameplay acceptance does not require generating new motion."
+  },
+  "verification": {
+    "playableWithoutMotion": true,
+    "probes": [
+      {
+        "id": "boots-main-menu",
+        "kind": "boot",
+        "description": "Boots into the voxel main menu without script errors."
+      },
+      {
+        "id": "create-world",
+        "kind": "state",
+        "description": "A new world reaches streamed playable terrain."
+      },
+      {
+        "id": "move-mine-place",
+        "kind": "input",
+        "description": "The avatar can move, mine one block and place one block."
+      },
+      {
+        "id": "save-and-resume",
+        "kind": "state",
+        "description": "A block edit persists across world reload."
+      }
+    ]
+  },
+  "scope": {
+    "targetMinutes": {
+      "min": 10,
+      "max": 60
+    },
+    "minimumDistinctSections": 3,
+    "escalationCount": 4,
+    "objective": "Create or resume a world, gather resources, craft tools, build, survive hostile nights, and preserve world edits.",
+    "hasFailure": true,
+    "hasVictory": false,
+    "hasFastRestart": true
+  },
   "userFacing": {
     "tagline": "Mine, build, farm and survive a living voxel world that quietly unsettles you.",
     "highlights": [
