@@ -1,6 +1,6 @@
 {
   "id": "3d-voxel-sandbox",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "name": "3D Voxel Sandbox",
   "engineMinVersion": "0.5.43",
   "entryScene": "res://scenes/main_menu.tscn",
