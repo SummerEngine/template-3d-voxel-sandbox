@@ -1,6 +1,7 @@
 # Godot 4+ specific ignores
 .godot/
-*.import
+# *.import files are import settings + uids for the shipped PNG/WAV/MP3 assets; commit them
+# once an editor pass has generated them so every clone imports identically.
 /android/
 
 # Summer Engine local-only state
